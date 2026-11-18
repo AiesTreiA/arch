@@ -242,5 +242,76 @@ test('sistema de floaters anti-superposición maneja múltiples elementos simult
   assert.ok(items[1].renderY > items[2].renderY);
 });
 
+test('cadencia de ataque y velocidad de proyectiles son rápidas y receptivas en todas las clases', () => {
+  for (const [classId, cls] of Object.entries(HERO_CLASSES)) {
+    assert.ok(cls.attackCd <= 0.28, `${classId} attackCd (${cls.attackCd}) debe ser <= 0.28s para alta cadencia`);
+    assert.ok(cls.attackCd >= 0.18, `${classId} attackCd (${cls.attackCd}) debe ser >= 0.18s`);
+  }
+});
+
+test('sistema de efectos visuales 3D escala proporcionales al daño para Rayo de Zeus y habilidades', async () => {
+  const { ArchRenderer3D } = await import('../src/game/models3d.js');
+  // Mock canvas minimal
+  const fakeCanvas = {
+    parentElement: { insertBefore: () => {} },
+    style: {},
+    width: 800,
+    height: 600,
+    getBoundingClientRect: () => ({ width: 800, height: 600, left: 0, top: 0 }),
+  };
+
+  const r3d = new ArchRenderer3D(fakeCanvas);
+  // Si WebGL no está disponible en el entorno headless de tests, r3d.enabled será false
+  assert.ok(r3d);
+  assert.equal(typeof r3d.triggerSkillVFX, 'function');
+
+  const { Group } = await import('three');
+  r3d.enabled = true;
+  r3d.fxGroup = new Group();
+  r3d.activeVFX = [];
+
+  // Probar Rayo de Zeus con daño bajo (20) vs daño alto (90)
+  r3d.triggerSkillVFX({ type: 'lightning', x: 2, y: 2, damage: 20 });
+  const vfxLow = r3d.activeVFX[r3d.activeVFX.length - 1];
+
+  r3d.triggerSkillVFX({ type: 'lightning', x: 2, y: 2, damage: 90 });
+  const vfxHigh = r3d.activeVFX[r3d.activeVFX.length - 1];
+
+  assert.ok(vfxHigh.particles.length > vfxLow.particles.length, 'Mayor daño genera más chispas eléctricas');
+  assert.ok(vfxHigh.baseLightIntensity > vfxLow.baseLightIntensity, 'Mayor daño genera destello de luz más intenso');
+
+  // Probar las demás habilidades de todas las clases
+  const skillTypes = [
+    'whirlwind',
+    'shout',
+    'shield_slam',
+    'solar_nova',
+    'lunar_arrow',
+    'salva',
+    'caronte_spear',
+    'atropos_void',
+    'erinias_slash',
+    'sentinel_burst',
+    'earth_shatter',
+    'licaon_roar',
+  ];
+
+  for (const type of skillTypes) {
+    const prevCount = r3d.activeVFX.length;
+    r3d.triggerSkillVFX({ type, x: 5, y: 5, targetX: 7, targetY: 7, damage: 45 });
+    assert.equal(r3d.activeVFX.length, prevCount + 1, `Efecto ${type} debe crearse en activeVFX`);
+  }
+
+  // Simular avance de fotograma y física de partículas
+  assert.ok(r3d.activeVFX.length >= 14);
+  r3d._updateVFX(0.05);
+  assert.ok(r3d.activeVFX.length >= 14);
+
+  // Simular expiración de ciclo de vida
+  r3d._updateVFX(1.0);
+  assert.equal(r3d.activeVFX.length, 0, 'Todos los efectos deben expirar y liberarse limpiamente');
+});
+
+
 
 

@@ -65,6 +65,10 @@ export class ArchGame {
     this.lastTs = 0;
     this.lastDt = 0.016;
     this.attackCdLeft = 0;
+    this.attackQueued = false;
+    this.attackBufferTimer = 0;
+    this.screenShake = 0;
+    this.vfx2d = [];
     this.skillQCd = 0;
     this.skillECd = 0;
     this.moveTarget = null;
@@ -81,6 +85,10 @@ export class ArchGame {
 
     this._bindEvents();
     this._resize();
+  }
+
+  shakeScreen(amount = 0.3) {
+    this.screenShake = Math.min(1.0, (this.screenShake || 0) + amount);
   }
 
   _bindEvents() {
@@ -108,8 +116,14 @@ export class ArchGame {
       if (k === 'q') this.castSkill('q');
       else if (k === 'e') this.castSkill('e');
       else if (k === '1' || k === 'r') this.usePotion();
-      else if (k === 'f' || k === 'g') this.interactNearby();
-      else if (k === ' ') this.basicAttackNearest({ allowInteract: true });
+      else if (k === ' ') {
+        if (this.attackCdLeft <= 0) {
+          this.basicAttackNearest({ allowInteract: true });
+        } else {
+          this.attackQueued = true;
+          this.attackBufferTimer = 0.28;
+        }
+      }
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     window.addEventListener('blur', () => {
@@ -238,8 +252,11 @@ export class ArchGame {
     const derived = computeHeroDerived(this.hero);
     this.hero.hp = derived.maxHp;
     this.hero.mana = derived.maxMana;
-    this.gameOver = false;
     this.attackCdLeft = 0;
+    this.attackQueued = false;
+    this.attackBufferTimer = 0;
+    this.screenShake = 0;
+    this.vfx2d = [];
     this.skillQCd = 0;
     this.skillECd = 0;
     this.attackHeld = false;
@@ -532,7 +549,12 @@ export class ArchGame {
   }
 
   basicAttackNearest({ allowInteract = true } = {}) {
-    if (this.attackCdLeft > 0 || this.gameOver) return;
+    if (this.gameOver) return;
+    if (this.attackCdLeft > 0) {
+      this.attackQueued = true;
+      this.attackBufferTimer = 0.28;
+      return;
+    }
     const derived = computeHeroDerived(this.hero);
     const inRangeTarget =
       (this.attackTargetId && this.enemies.find((e) => e.id === this.attackTargetId && e.hp > 0)) ||
@@ -576,9 +598,9 @@ export class ArchGame {
             fromHero: true,
             x: this.pos.x,
             y: this.pos.y,
-            vx: Math.cos(ang) * 11,
-            vy: Math.sin(ang) * 11,
-            life: 0.75,
+            vx: Math.cos(ang) * 22,
+            vy: Math.sin(ang) * 22,
+            life: 0.85,
             minDmg: derived.minDamage,
             maxDmg: derived.maxDamage,
             critChance: derived.critChance,
@@ -601,9 +623,9 @@ export class ArchGame {
         fromHero: true,
         x: this.pos.x,
         y: this.pos.y,
-        vx: Math.cos(ang) * 11,
-        vy: Math.sin(ang) * 11,
-        life: 0.75,
+        vx: Math.cos(ang) * 22,
+        vy: Math.sin(ang) * 22,
+        life: 0.85,
         minDmg: derived.minDamage,
         maxDmg: derived.maxDamage,
         critChance: derived.critChance,
@@ -640,76 +662,138 @@ export class ArchGame {
     if (this.hero.classId === 'campeon') {
       if (slot === 'q') {
         let hits = 0;
+        let totalDmg = 0;
+        let isCrit = false;
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
-          if (Math.hypot(e.x - this.pos.x, e.y - this.pos.y) <= 2.6) {
-            this._strikeEnemy(e, {
+          if (Math.hypot(e.x - this.pos.x, e.y - this.pos.y) <= 2.8) {
+            const res = this._strikeEnemy(e, {
               ...derived,
               minDamage: derived.minDamage * 1.45,
               maxDamage: derived.maxDamage * 1.65,
               lifeOnHit: derived.lifeOnHit + 4,
             });
-            hits++;
+            if (res?.hit) {
+              hits++;
+              totalDmg += res.damage;
+              if (res.crit) isCrit = true;
+            }
           }
         }
+        const effectDmg = totalDmg > 0 ? totalDmg : Math.round(derived.maxDamage * 1.55);
+        this.shakeScreen(Math.min(0.65, 0.25 + (effectDmg / 60) * 0.25));
+        this.renderer3d?.triggerSkillVFX({
+          type: 'whirlwind',
+          x: this.pos.x,
+          y: this.pos.y,
+          damage: effectDmg,
+          isCrit,
+        });
         this.addFloater(this.pos.x, this.pos.y, hits ? '¡Torbellino Tracio!' : 'Torbellino', '#ef4444');
       } else {
         this.hero.buffs.furyUntil = now + 5500;
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
           const d = Math.hypot(e.x - this.pos.x, e.y - this.pos.y);
-          if (d <= 3.0) {
-            const nx = e.x + ((e.x - this.pos.x) / Math.max(0.2, d)) * 1.1;
-            const ny = e.y + ((e.y - this.pos.y) / Math.max(0.2, d)) * 1.1;
+          if (d <= 3.2) {
+            const nx = e.x + ((e.x - this.pos.x) / Math.max(0.2, d)) * 1.2;
+            const ny = e.y + ((e.y - this.pos.y) / Math.max(0.2, d)) * 1.2;
             if (isWalkable(this.dungeon, nx, ny)) { e.x = nx; e.y = ny; }
           }
         }
+        const shoutDmg = Math.round(derived.maxDamage * 1.45);
+        this.shakeScreen(0.35);
+        this.renderer3d?.triggerSkillVFX({
+          type: 'shout',
+          x: this.pos.x,
+          y: this.pos.y,
+          damage: shoutDmg,
+          color: '#fb923c',
+        });
         this.addFloater(this.pos.x, this.pos.y, '¡Grito de Fobos!', '#fb923c');
       }
     } else if (this.hero.classId === 'hoplita') {
       if (slot === 'q') {
         let hitCount = 0;
+        let totalDmg = 0;
+        let isCrit = false;
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
           const d = Math.hypot(e.x - this.pos.x, e.y - this.pos.y);
-          if (d <= 2.4) {
-            this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.4, maxDamage: derived.maxDamage * 1.5 });
-            const nx = e.x + ((e.x - this.pos.x) / Math.max(0.2, d)) * 0.9;
-            const ny = e.y + ((e.y - this.pos.y) / Math.max(0.2, d)) * 0.9;
+          if (d <= 2.6) {
+            const res = this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.4, maxDamage: derived.maxDamage * 1.5 });
+            if (res?.hit) {
+              hitCount++;
+              totalDmg += res.damage;
+              if (res.crit) isCrit = true;
+            }
+            const nx = e.x + ((e.x - this.pos.x) / Math.max(0.2, d)) * 0.95;
+            const ny = e.y + ((e.y - this.pos.y) / Math.max(0.2, d)) * 0.95;
             if (isWalkable(this.dungeon, nx, ny)) { e.x = nx; e.y = ny; }
-            hitCount++;
           }
         }
+        const bashDmg = totalDmg > 0 ? totalDmg : Math.round(derived.maxDamage * 1.45);
+        this.shakeScreen(Math.min(0.65, 0.3 + (bashDmg / 55) * 0.25));
+        this.renderer3d?.triggerSkillVFX({
+          type: 'shield_slam',
+          x: this.pos.x,
+          y: this.pos.y,
+          dirX: this.lastAimDir?.x || 1,
+          dirY: this.lastAimDir?.y || 0,
+          damage: bashDmg,
+          isCrit,
+        });
         this.addFloater(this.pos.x, this.pos.y, hitCount ? '¡Golpe de Égida!' : 'Égida al aire', '#f59e0b');
       } else {
         this.hero.buffs.shieldUntil = now + 6000;
         this.hero.buffs.furyUntil = now + 4500;
+        let auraDmg = 0;
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
-          if (Math.hypot(e.x - this.pos.x, e.y - this.pos.y) <= 2.8) {
-            this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 0.9, maxDamage: derived.maxDamage * 1.1 });
+          if (Math.hypot(e.x - this.pos.x, e.y - this.pos.y) <= 3.0) {
+            const res = this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 0.95, maxDamage: derived.maxDamage * 1.15 });
+            if (res?.hit) auraDmg += res.damage;
           }
         }
+        const effDmg = auraDmg > 0 ? auraDmg : Math.round(derived.maxDamage * 1.1);
+        this.shakeScreen(0.38);
+        this.renderer3d?.triggerSkillVFX({
+          type: 'solar_nova',
+          x: this.pos.x,
+          y: this.pos.y,
+          damage: effDmg,
+          color: '#facc15',
+        });
         this.addFloater(this.pos.x, this.pos.y, '☀ Aura de Apolo', '#facc15');
       }
     } else if (this.hero.classId === 'arquera') {
       if (slot === 'q') {
         const t = this._nearestEnemy(9) || this._aimFallbackTarget();
         const ang = Math.atan2(t.y - this.pos.y, t.x - this.pos.x);
+        const lunarDmg = Math.round(derived.maxDamage * 1.75);
         this.projectiles.push({
           fromHero: true,
           pierce: true,
           x: this.pos.x,
           y: this.pos.y,
-          vx: Math.cos(ang) * 14,
-          vy: Math.sin(ang) * 14,
+          vx: Math.cos(ang) * 26,
+          vy: Math.sin(ang) * 26,
           life: 0.9,
           minDmg: derived.minDamage * 1.6,
           maxDmg: derived.maxDamage * 1.85,
           critChance: Math.min(0.85, derived.critChance + 0.25),
           color: '#4ade80',
         });
-        this.addFloater(this.pos.x, this.pos.y, 'Flecha Lunar', '#4ade80');
+        this.shakeScreen(0.24);
+        this.renderer3d?.triggerSkillVFX({
+          type: 'lunar_arrow',
+          x: this.pos.x,
+          y: this.pos.y,
+          targetX: t.x,
+          targetY: t.y,
+          damage: lunarDmg,
+        });
+        this.addFloater(this.pos.x, this.pos.y, '🏹 Flecha Lunar', '#4ade80');
       } else {
         const t = this._nearestEnemy(9) || this._aimFallbackTarget();
         for (const offset of [-0.22, 0, 0.22]) {
@@ -719,8 +803,8 @@ export class ArchGame {
             pierce: true,
             x: this.pos.x,
             y: this.pos.y,
-            vx: Math.cos(ang) * 13,
-            vy: Math.sin(ang) * 13,
+            vx: Math.cos(ang) * 24,
+            vy: Math.sin(ang) * 24,
             life: 0.75,
             minDmg: derived.minDamage * 1.15,
             maxDmg: derived.maxDamage * 1.35,
@@ -731,38 +815,71 @@ export class ArchGame {
         const heal = Math.round(derived.maxHp * 0.14);
         this.hero.hp = Math.min(derived.maxHp, this.hero.hp + heal);
         this.hero.buffs.furyUntil = now + 3500;
-        this.addFloater(this.pos.x, this.pos.y, `Salva de Ortigia +${heal}`, '#4ade80');
+        this.renderer3d?.triggerSkillVFX({
+          type: 'salva',
+          x: this.pos.x,
+          y: this.pos.y,
+          damage: heal * 2,
+        });
+        this.addFloater(this.pos.x, this.pos.y, `🌿 Salva de Ortigia +${heal}`, '#4ade80');
       }
     } else if (this.hero.classId === 'necromante') {
       if (slot === 'q') {
         const t = this._nearestEnemy(9) || this._aimFallbackTarget();
         const ang = Math.atan2(t.y - this.pos.y, t.x - this.pos.x);
+        const spearDmg = Math.round(derived.maxDamage * 1.65);
         this.projectiles.push({
           fromHero: true,
           pierce: true,
           x: this.pos.x,
           y: this.pos.y,
-          vx: Math.cos(ang) * 12.5,
-          vy: Math.sin(ang) * 12.5,
-          life: 0.95,
+          vx: Math.cos(ang) * 25,
+          vy: Math.sin(ang) * 25,
+          life: 0.9,
           minDmg: derived.minDamage * 1.55,
           maxDmg: derived.maxDamage * 1.75,
           critChance: derived.critChance + 0.12,
           color: '#c084fc',
         });
         this.hero.hp = Math.min(derived.maxHp, this.hero.hp + 5);
+        this.shakeScreen(0.24);
+        this.renderer3d?.triggerSkillVFX({
+          type: 'caronte_spear',
+          x: this.pos.x,
+          y: this.pos.y,
+          targetX: t.x,
+          targetY: t.y,
+          damage: spearDmg,
+        });
         this.addFloater(this.pos.x, this.pos.y, '💀 Lanza de Caronte', '#c084fc');
       } else {
         const target = this._nearestEnemy(8) || { x: this.pos.x, y: this.pos.y };
+        let voidDmg = 0;
+        let isCrit = false;
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
-          if (Math.hypot(e.x - target.x, e.y - target.y) <= 2.8) {
+          if (Math.hypot(e.x - target.x, e.y - target.y) <= 2.9) {
             e.armor = Math.max(0, Math.round(e.armor * 0.6));
-            this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.45, maxDamage: derived.maxDamage * 1.65 });
+            const res = this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.45, maxDamage: derived.maxDamage * 1.65 });
+            if (res?.hit) {
+              voidDmg += res.damage;
+              if (res.crit) isCrit = true;
+            }
           }
         }
+        const effVoidDmg = voidDmg > 0 ? voidDmg : Math.round(derived.maxDamage * 1.55);
         const drain = Math.round(derived.maxHp * 0.16);
         this.hero.hp = Math.min(derived.maxHp, this.hero.hp + drain);
+        this.shakeScreen(Math.min(0.75, 0.35 + (effVoidDmg / 60) * 0.3));
+        this.renderer3d?.triggerSkillVFX({
+          type: 'atropos_void',
+          x: this.pos.x,
+          y: this.pos.y,
+          targetX: target.x,
+          targetY: target.y,
+          damage: effVoidDmg,
+          isCrit,
+        });
         this.addFloater(target.x, target.y, '☠ Condena de Átropos', '#a855f7');
       }
     } else if (this.hero.classId === 'sombra') {
@@ -777,11 +894,22 @@ export class ArchGame {
             this.pos.y = ny;
             updateVisibility(this.dungeon, this.pos.x, this.pos.y, 8);
           }
-          this._strikeEnemy(target, {
+          const res = this._strikeEnemy(target, {
             ...derived,
             minDamage: derived.minDamage * 1.75,
             maxDamage: derived.maxDamage * 2.0,
             critChance: Math.min(0.95, derived.critChance + 0.35),
+          });
+          const d = res?.hit ? res.damage : Math.round(derived.maxDamage * 1.85);
+          this.shakeScreen(Math.min(0.75, 0.35 + (d / 50) * 0.3));
+          this.renderer3d?.triggerSkillVFX({
+            type: 'erinias_slash',
+            x: this.pos.x,
+            y: this.pos.y,
+            targetX: target.x,
+            targetY: target.y,
+            damage: d,
+            isCrit: res?.crit || false,
           });
           this.addFloater(target.x, target.y, '🗡 Filo de las Erinias', '#f472b6');
         } else {
@@ -797,8 +925,8 @@ export class ArchGame {
             pierce: false,
             x: this.pos.x,
             y: this.pos.y,
-            vx: Math.cos(ang) * 13.5,
-            vy: Math.sin(ang) * 13.5,
+            vx: Math.cos(ang) * 25,
+            vy: Math.sin(ang) * 25,
             life: 0.75,
             minDmg: derived.minDamage * 1.35,
             maxDmg: derived.maxDamage * 1.55,
@@ -806,43 +934,104 @@ export class ArchGame {
             color: '#f472b6',
           });
         }
+        this.shakeScreen(0.3);
+        this.renderer3d?.triggerSkillVFX({
+          type: 'sentinel_burst',
+          x: this.pos.x,
+          y: this.pos.y,
+          damage: derived.maxDamage * 1.45,
+        });
         this.addFloater(this.pos.x, this.pos.y, '⚙ Centinela de Hefesto', '#ec4899');
       }
     } else if (this.hero.classId === 'coribante') {
       if (slot === 'q') {
+        let earthHits = 0;
+        let totalEarthDmg = 0;
+        let isCrit = false;
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
           const d = Math.hypot(e.x - this.pos.x, e.y - this.pos.y);
-          if (d <= 2.9) {
-            this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.5, maxDamage: derived.maxDamage * 1.7 });
-            const nx = e.x + ((e.x - this.pos.x) / Math.max(0.2, d)) * 0.8;
-            const ny = e.y + ((e.y - this.pos.y) / Math.max(0.2, d)) * 0.8;
+          if (d <= 3.0) {
+            const res = this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.5, maxDamage: derived.maxDamage * 1.7 });
+            if (res?.hit) {
+              earthHits++;
+              totalEarthDmg += res.damage;
+              if (res.crit) isCrit = true;
+            }
+            const nx = e.x + ((e.x - this.pos.x) / Math.max(0.2, d)) * 0.85;
+            const ny = e.y + ((e.y - this.pos.y) / Math.max(0.2, d)) * 0.85;
             if (isWalkable(this.dungeon, nx, ny)) { e.x = nx; e.y = ny; }
           }
         }
+        const effEarthDmg = totalEarthDmg > 0 ? totalEarthDmg : Math.round(derived.maxDamage * 1.6);
+        this.shakeScreen(Math.min(0.85, 0.4 + (effEarthDmg / 50) * 0.35));
+        this.renderer3d?.triggerSkillVFX({
+          type: 'earth_shatter',
+          x: this.pos.x,
+          y: this.pos.y,
+          damage: effEarthDmg,
+          isCrit,
+        });
         this.addFloater(this.pos.x, this.pos.y, '🌋 Cólera de Gea', '#84cc16');
       } else {
         const heal = Math.round(derived.maxHp * 0.24);
         this.hero.hp = Math.min(derived.maxHp, this.hero.hp + heal);
         this.hero.buffs.furyUntil = now + 5500;
         this.hero.buffs.shieldUntil = now + 5500;
+        this.shakeScreen(0.35);
+        this.renderer3d?.triggerSkillVFX({
+          type: 'licaon_roar',
+          x: this.pos.x,
+          y: this.pos.y,
+          damage: heal * 2,
+        });
         this.addFloater(this.pos.x, this.pos.y, `🐺 Forma de Licaón +${heal}`, '#a3e635');
       }
     } else {
       if (slot === 'q') {
-        const target = this._nearestEnemy(8) || { x: this.pos.x, y: this.pos.y };
+        const target = this._nearestEnemy(8) || this._aimFallbackTarget();
+        let totalLightningDmg = 0;
+        let lightningHits = 0;
+        let isCrit = false;
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
-          if (Math.hypot(e.x - target.x, e.y - target.y) <= 2.5) {
-            this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.5, maxDamage: derived.maxDamage * 1.7 });
+          if (Math.hypot(e.x - target.x, e.y - target.y) <= 2.8) {
+            const res = this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.5, maxDamage: derived.maxDamage * 1.7 });
+            if (res?.hit) {
+              lightningHits++;
+              totalLightningDmg += res.damage;
+              if (res.crit) isCrit = true;
+            }
           }
         }
-        this.addFloater(target.x, target.y, '⚡ Rayo de Zeus', '#38bdf8');
+        const effLightningDmg = totalLightningDmg > 0 ? totalLightningDmg : Math.round(derived.maxDamage * 1.6);
+        this.shakeScreen(Math.min(0.85, 0.42 + (effLightningDmg / 50) * 0.35));
+        this.renderer3d?.triggerSkillVFX({
+          type: 'lightning',
+          x: this.pos.x,
+          y: this.pos.y,
+          targetX: target.x,
+          targetY: target.y,
+          damage: effLightningDmg,
+          isCrit,
+          color: '#38bdf8',
+        });
+        this.addFloater(target.x, target.y, lightningHits ? '⚡ ¡Rayo de Zeus!' : '⚡ Rayo de Zeus', '#38bdf8');
       } else {
         this.hero.buffs.shieldUntil = now + 6000;
+        this.shakeScreen(0.25);
+        this.renderer3d?.triggerSkillVFX({
+          type: 'solar_nova',
+          x: this.pos.x,
+          y: this.pos.y,
+          damage: derived.maxDamage,
+          color: '#38bdf8',
+        });
         this.addFloater(this.pos.x, this.pos.y, 'Égida Etérea', '#38bdf8');
       }
     }
+    this._notify();
+  }
     this._notify();
   }
 
@@ -857,7 +1046,7 @@ export class ArchGame {
     });
     if (!res.hit) {
       this.addFloater(enemy.x, enemy.y, 'Fallo', '#94a3b8');
-      return;
+      return res;
     }
     enemy.hp = Math.max(0, enemy.hp - res.damage);
     this.addFloater(enemy.x, enemy.y, res.crit ? `${res.damage}!` : `${res.damage}`, res.crit ? '#facc15' : '#f8fafc');
@@ -867,6 +1056,7 @@ export class ArchGame {
     if (enemy.hp <= 0) {
       this._onEnemyKilled(enemy);
     }
+    return res;
   }
 
   _advanceQuest(questId, amount = 1, gx = this.pos.x, gy = this.pos.y) {
@@ -962,8 +1152,22 @@ export class ArchGame {
     this.skillECd = Math.max(0, this.skillECd - dt);
     this.hero.mana = Math.min(derived.maxMana, this.hero.mana + dt * 2.2);
 
-    if (this.attackHeld && this.attackCdLeft <= 0) {
+    if (this.attackBufferTimer > 0) {
+      this.attackBufferTimer -= dt;
+      if (this.attackBufferTimer <= 0) {
+        this.attackQueued = false;
+      }
+    }
+
+    const wantsAttack = this.attackHeld || this.attackQueued || this.keys.has(' ');
+    if (wantsAttack && this.attackCdLeft <= 0) {
+      this.attackQueued = false;
+      this.attackBufferTimer = 0;
       this.basicAttackNearest({ allowInteract: false });
+    }
+
+    if (this.screenShake > 0) {
+      this.screenShake = Math.max(0, this.screenShake - dt * 2.8);
     }
 
     // Movimiento por teclado + joystick analógico (dirección en pantalla -> grilla isométrica)
@@ -1182,6 +1386,12 @@ export class ArchGame {
     const targetIso = toIso(this.pos.x, this.pos.y);
     this.cam.x += (targetIso.x - this.cam.x) * Math.min(1, dt * 8);
     this.cam.y += (targetIso.y - this.cam.y) * Math.min(1, dt * 8);
+
+    if (this.screenShake > 0) {
+      const shakeMag = this.screenShake * 14;
+      this.cam.x += (Math.random() - 0.5) * shakeMag;
+      this.cam.y += (Math.random() - 0.5) * shakeMag;
+    }
 
     this._hudTickAcc += dt;
     if (this._hudTickAcc >= 0.066) {

@@ -41,6 +41,20 @@ function enableShadows(obj, cast = true, receive = true) {
   return obj;
 }
 
+export function disposeObject3D(obj) {
+  if (!obj) return;
+  obj.traverse((child) => {
+    if (child.isMesh) {
+      if (child.geometry) child.geometry.dispose();
+      if (Array.isArray(child.material)) {
+        child.material.forEach((m) => m?.dispose?.());
+      } else if (child.material) {
+        child.material?.dispose?.();
+      }
+    }
+  });
+}
+
 /**
  * Construye el modelo 3D articulado de cualquiera de las 7 clases griegas.
  * Retorna un THREE.Group con `userData.rig` para animación de extremidades, arma, capa y auras.
@@ -947,6 +961,7 @@ export class ArchRenderer3D {
       this.enemyMeshes = new Map();
       this.dropMeshes = [];
       this.projMeshes = [];
+      this.activeVFX = [];
       this.zoom = 1.0;
 
       this.lastHeroPos = { x: 0, y: 0 };
@@ -997,6 +1012,19 @@ export class ArchRenderer3D {
     this.tileMeshes = [];
     this.shrineGroup = null;
     this.npcGroup = null;
+
+    if (this.activeVFX) {
+      for (const vfx of this.activeVFX) {
+        if (vfx.mesh) {
+          this.fxGroup.remove(vfx.mesh);
+          disposeObject3D(vfx.mesh);
+        }
+        if (vfx.light) {
+          this.fxGroup.remove(vfx.light);
+        }
+      }
+      this.activeVFX = [];
+    }
 
     const { width, height, grid, biome } = dungeon;
     const floorGeo = new THREE.BoxGeometry(0.98, 0.12, 0.98);
@@ -1110,6 +1138,698 @@ export class ArchRenderer3D {
     this.heroMesh.userData.rig.attackTimer = 0.28;
     if (whirlwind) {
       this.heroMesh.userData.rig.whirlwindTimer = 0.55;
+    }
+  }
+
+  /**
+   * Dispara efectos visuales 3D espectaculares proporcionales al daño infligido.
+   * Cubre Rayo de Zeus (descarga celestial con arco forzado, cráter de plasma y chispas)
+   * y las habilidades de todas las clases del juego.
+   */
+  triggerSkillVFX({
+    type = 'lightning',
+    x = 0,
+    y = 0,
+    targetX = null,
+    targetY = null,
+    damage = 30,
+    isCrit = false,
+    color = null,
+    dirX = 1,
+    dirY = 0,
+  } = {}) {
+    if (!this.enabled) return;
+    const tx = targetX !== null ? targetX : x;
+    const ty = targetY !== null ? targetY : y;
+    const damageRatio = Math.max(0.65, Math.min(3.5, (damage || 30) / 28));
+
+    if (type === 'lightning') {
+      const group = new THREE.Group();
+      const skyY = 13 + damageRatio * 2.2;
+      const boltCoreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      const boltGlowMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.88 });
+
+      // Segmentos del rayo en zigzag desde el cielo hasta el objetivo
+      const numSegments = 9;
+      const points = [];
+      points.push(new THREE.Vector3(tx + (Math.random() - 0.5) * 1.6, skyY, ty + (Math.random() - 0.5) * 1.6));
+      for (let i = 1; i < numSegments; i++) {
+        const frac = i / numSegments;
+        const curY = skyY * (1 - frac);
+        const zig = (1 - frac) * 0.8 * damageRatio;
+        const px = tx + (Math.random() - 0.5) * zig;
+        const pz = ty + (Math.random() - 0.5) * zig;
+        points.push(new THREE.Vector3(px, curY, pz));
+      }
+      points.push(new THREE.Vector3(tx, 0.05, ty));
+
+      const coreRadius = Math.max(0.04, 0.065 * damageRatio);
+      const glowRadius = coreRadius * 2.6;
+      for (let i = 0; i < points.length - 1; i++) {
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const segLen = p1.distanceTo(p2);
+        const mid = new THREE.Vector3().addVectors(p1, p2).multiplyScalar(0.5);
+
+        const coreGeom = new THREE.CylinderGeometry(coreRadius, coreRadius, segLen, 6);
+        const coreMesh = new THREE.Mesh(coreGeom, boltCoreMat);
+        coreMesh.position.copy(mid);
+        coreMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3().subVectors(p2, p1).normalize());
+        group.add(coreMesh);
+
+        const glowGeom = new THREE.CylinderGeometry(glowRadius, glowRadius, segLen, 6);
+        const glowMesh = new THREE.Mesh(glowGeom, boltGlowMat);
+        glowMesh.position.copy(mid);
+        glowMesh.quaternion.copy(coreMesh.quaternion);
+        group.add(glowMesh);
+      }
+
+      // Rama secundaria de descarga eléctrica
+      if (points.length > 5) {
+        const branchStart = points[4].clone();
+        const branchEnd = new THREE.Vector3(
+          branchStart.x + (Math.random() - 0.5) * 2.4 * damageRatio,
+          branchStart.y * 0.45,
+          branchStart.z + (Math.random() - 0.5) * 2.4 * damageRatio
+        );
+        const bLen = branchStart.distanceTo(branchEnd);
+        const bMid = new THREE.Vector3().addVectors(branchStart, branchEnd).multiplyScalar(0.5);
+        const bMesh = new THREE.Mesh(new THREE.CylinderGeometry(coreRadius * 0.7, coreRadius * 0.35, bLen, 5), boltGlowMat);
+        bMesh.position.copy(bMid);
+        bMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3().subVectors(branchEnd, branchStart).normalize());
+        group.add(bMesh);
+      }
+
+      // Anillo de onda de choque eléctrica en el suelo
+      const ringGeom = new THREE.RingGeometry(0.1, 0.32 * damageRatio, 32);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      ringMesh.position.set(tx, 0.04, ty);
+      group.add(ringMesh);
+
+      // Marca de impacto y plasma en el piso
+      const scorchGeom = new THREE.CircleGeometry(0.55 * damageRatio, 24);
+      const scorchMat = new THREE.MeshBasicMaterial({ color: 0x0369a1, transparent: true, opacity: 0.75 });
+      const scorchMesh = new THREE.Mesh(scorchGeom, scorchMat);
+      scorchMesh.rotation.x = -Math.PI / 2;
+      scorchMesh.position.set(tx, 0.02, ty);
+      group.add(scorchMesh);
+
+      // Luz dinámica de relámpago
+      const light = new THREE.PointLight(0x7dd3fc, 9.0 * damageRatio, 15 * damageRatio);
+      light.position.set(tx, 1.3, ty);
+      this.fxGroup.add(light);
+
+      // Chispas de alta energía
+      const particles = [];
+      const sparkGeom = new THREE.OctahedronGeometry(0.045 * damageRatio);
+      const sparkMat = new THREE.MeshBasicMaterial({ color: 0xe0f2fe });
+      const pCount = Math.floor(22 * damageRatio);
+      for (let i = 0; i < pCount; i++) {
+        const pm = new THREE.Mesh(sparkGeom, sparkMat.clone());
+        pm.position.set(tx, 0.15, ty);
+        group.add(pm);
+        const ang = Math.random() * Math.PI * 2;
+        const spd = (2.5 + Math.random() * 5.0) * damageRatio;
+        particles.push({
+          mesh: pm,
+          vx: Math.cos(ang) * spd,
+          vy: 2.8 + Math.random() * 5.5 * damageRatio,
+          vz: Math.sin(ang) * spd,
+        });
+      }
+
+      this.fxGroup.add(group);
+      const totalLife = 0.44;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        particles,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          const currentRadius = 0.32 * damageRatio + p * (2.8 * damageRatio);
+          ringMesh.scale.set(currentRadius / (0.32 * damageRatio), currentRadius / (0.32 * damageRatio), 1);
+          ringMat.opacity = Math.max(0, 0.95 * (1 - p * 1.25));
+          scorchMat.opacity = Math.max(0, 0.75 * (1 - p * 0.85));
+          if (p > 0.32) {
+            boltCoreMat.transparent = true;
+            boltCoreMat.opacity = Math.max(0, (0.55 - p) / 0.23);
+            boltGlowMat.opacity = Math.max(0, (0.55 - p) / 0.23);
+          }
+        },
+      });
+    } else if (type === 'whirlwind') {
+      const group = new THREE.Group();
+      group.position.set(x, 0.35, y);
+      const r1 = 0.9 * damageRatio;
+      const r2 = 1.35 * damageRatio;
+      const bladeMat = new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+      const ring1 = new THREE.Mesh(new THREE.TorusGeometry(r1, 0.08 * damageRatio, 8, 24), bladeMat);
+      ring1.rotation.x = Math.PI / 2;
+      const ring2 = new THREE.Mesh(new THREE.TorusGeometry(r2, 0.06 * damageRatio, 8, 24), bladeMat);
+      ring2.rotation.x = Math.PI / 2;
+      group.add(ring1, ring2);
+
+      const light = new THREE.PointLight(0xef4444, 4.5 * damageRatio, 9 * damageRatio);
+      light.position.set(x, 1.0, y);
+      this.fxGroup.add(light);
+
+      const particles = [];
+      const pGeom = new THREE.OctahedronGeometry(0.04 * damageRatio);
+      const pMat = new THREE.MeshBasicMaterial({ color: 0xf87171 });
+      const pCount = Math.floor(18 * damageRatio);
+      for (let i = 0; i < pCount; i++) {
+        const pm = new THREE.Mesh(pGeom, pMat.clone());
+        pm.position.set(x, 0.25, y);
+        group.add(pm);
+        const ang = (i / pCount) * Math.PI * 2;
+        const spd = (3.0 + Math.random() * 3.5) * damageRatio;
+        particles.push({
+          mesh: pm,
+          vx: Math.cos(ang) * spd,
+          vy: 1.5 + Math.random() * 3.0,
+          vz: Math.sin(ang) * spd,
+        });
+      }
+
+      this.fxGroup.add(group);
+      const totalLife = 0.52;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        particles,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          group.rotation.y += dt * 26;
+          const s = 1 + p * 0.85;
+          ring1.scale.set(s, s, 1);
+          ring2.scale.set(s, s, 1);
+          bladeMat.opacity = Math.max(0, 0.85 * (1 - p));
+        },
+      });
+    } else if (type === 'shout') {
+      const group = new THREE.Group();
+      group.position.set(x, 0.08, y);
+      const ringGeom = new THREE.TorusGeometry(0.5, 0.09 * damageRatio, 8, 30);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0xfb923c, transparent: true, opacity: 0.85 });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.rotation.x = Math.PI / 2;
+      group.add(ringMesh);
+
+      const light = new THREE.PointLight(0xfb923c, 4.0 * damageRatio, 10 * damageRatio);
+      light.position.set(x, 1.2, y);
+      this.fxGroup.add(light);
+
+      this.fxGroup.add(group);
+      const totalLife = 0.45;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          const r = 1 + p * (4.2 * damageRatio);
+          ringMesh.scale.set(r, r, 1);
+          ringMat.opacity = Math.max(0, 0.85 * (1 - p));
+        },
+      });
+    } else if (type === 'shield_slam') {
+      const group = new THREE.Group();
+      group.position.set(x, 0.35, y);
+      const arcGeom = new THREE.TorusGeometry(0.85 * damageRatio, 0.12 * damageRatio, 8, 20, Math.PI * 0.85);
+      const arcMat = new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.9 });
+      const arcMesh = new THREE.Mesh(arcGeom, arcMat);
+      arcMesh.rotation.x = Math.PI / 2;
+      const aimAng = Math.atan2(dirY, dirX);
+      arcMesh.rotation.z = -aimAng - Math.PI * 0.42;
+      group.add(arcMesh);
+
+      const light = new THREE.PointLight(0xfacc15, 5.0 * damageRatio, 9 * damageRatio);
+      light.position.set(x + dirX * 0.8, 1.0, y + dirY * 0.8);
+      this.fxGroup.add(light);
+
+      const particles = [];
+      const sparkGeom = new THREE.OctahedronGeometry(0.045 * damageRatio);
+      const sparkMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+      const pCount = Math.floor(16 * damageRatio);
+      for (let i = 0; i < pCount; i++) {
+        const pm = new THREE.Mesh(sparkGeom, sparkMat.clone());
+        pm.position.set(x + dirX * 0.4, 0.35, y + dirY * 0.4);
+        group.add(pm);
+        const spread = (Math.random() - 0.5) * 1.1;
+        const spd = (3.5 + Math.random() * 4.5) * damageRatio;
+        const curAng = aimAng + spread;
+        particles.push({
+          mesh: pm,
+          vx: Math.cos(curAng) * spd,
+          vy: 1.5 + Math.random() * 3.5,
+          vz: Math.sin(curAng) * spd,
+        });
+      }
+
+      this.fxGroup.add(group);
+      const totalLife = 0.38;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        particles,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          group.position.x += dirX * dt * 2.5;
+          group.position.z += dirY * dt * 2.5;
+          arcMesh.scale.multiplyScalar(1 + dt * 1.5);
+          arcMat.opacity = Math.max(0, 0.9 * (1 - p));
+        },
+      });
+    } else if (type === 'solar_nova') {
+      const group = new THREE.Group();
+      group.position.set(x, 0.05, y);
+      const col = color ? new THREE.Color(color) : new THREE.Color(0xfacc15);
+      const ringGeom = new THREE.RingGeometry(0.2, 0.5 * damageRatio, 32);
+      const ringMat = new THREE.MeshBasicMaterial({ color: col, side: THREE.DoubleSide, transparent: true, opacity: 0.88 });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      // Rayos solares ascendentes
+      const rays = [];
+      const rayGeom = new THREE.CylinderGeometry(0.04 * damageRatio, 0.09 * damageRatio, 5.5, 6);
+      const rayMat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.65 });
+      for (let i = 0; i < 5; i++) {
+        const ray = new THREE.Mesh(rayGeom, rayMat.clone());
+        const ra = (i / 5) * Math.PI * 2;
+        const rr = 0.8 * damageRatio;
+        ray.position.set(Math.cos(ra) * rr, 2.7, Math.sin(ra) * rr);
+        group.add(ray);
+        rays.push(ray);
+      }
+
+      const light = new THREE.PointLight(col, 6.5 * damageRatio, 13 * damageRatio);
+      light.position.set(x, 1.6, y);
+      this.fxGroup.add(light);
+
+      this.fxGroup.add(group);
+      const totalLife = 0.55;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          const sc = 1 + p * (4.2 * damageRatio);
+          ringMesh.scale.set(sc, sc, 1);
+          ringMat.opacity = Math.max(0, 0.88 * (1 - p));
+          for (const ray of rays) {
+            ray.position.y += dt * 3.5;
+            ray.material.opacity = Math.max(0, 0.65 * (1 - p));
+          }
+        },
+      });
+    } else if (type === 'lunar_arrow') {
+      const group = new THREE.Group();
+      const col = new THREE.Color(0x4ade80);
+      const ringGeom = new THREE.RingGeometry(0.1, 0.3 * damageRatio, 24);
+      const ringMat = new THREE.MeshBasicMaterial({ color: col, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      ringMesh.position.set(tx, 0.1, ty);
+      group.add(ringMesh);
+
+      // Haz lunar a lo largo de la trayectoria
+      const dx = tx - x;
+      const dz = ty - y;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 0.5) {
+        const beamGeom = new THREE.CylinderGeometry(0.045 * damageRatio, 0.045 * damageRatio, dist, 6);
+        const beamMat = new THREE.MeshBasicMaterial({ color: 0x86efac, transparent: true, opacity: 0.75 });
+        const beam = new THREE.Mesh(beamGeom, beamMat);
+        beam.position.set(x + dx * 0.5, 0.35, y + dz * 0.5);
+        beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx, 0, dz).normalize());
+        group.add(beam);
+      }
+
+      const light = new THREE.PointLight(0x4ade80, 4.5 * damageRatio, 9 * damageRatio);
+      light.position.set(tx, 1.0, ty);
+      this.fxGroup.add(light);
+
+      this.fxGroup.add(group);
+      const totalLife = 0.38;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          const sc = 1 + p * (2.8 * damageRatio);
+          ringMesh.scale.set(sc, sc, 1);
+          ringMat.opacity = Math.max(0, 0.85 * (1 - p));
+        },
+      });
+    } else if (type === 'salva') {
+      const group = new THREE.Group();
+      group.position.set(x, 0.1, y);
+      const ringGeom = new THREE.TorusGeometry(0.7 * damageRatio, 0.06 * damageRatio, 8, 24);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.8 });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.rotation.x = Math.PI / 2;
+      group.add(ringMesh);
+
+      const light = new THREE.PointLight(0x22c55e, 3.5, 8);
+      light.position.set(x, 1.0, y);
+      this.fxGroup.add(light);
+
+      this.fxGroup.add(group);
+      const totalLife = 0.45;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          group.position.y += dt * 1.8;
+          group.rotation.y += dt * 6;
+          ringMat.opacity = Math.max(0, 0.8 * (1 - p));
+        },
+      });
+    } else if (type === 'caronte_spear') {
+      const group = new THREE.Group();
+      const col = new THREE.Color(0xc084fc);
+      const ringGeom = new THREE.RingGeometry(0.1, 0.3 * damageRatio, 24);
+      const ringMat = new THREE.MeshBasicMaterial({ color: col, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      ringMesh.position.set(tx, 0.1, ty);
+      group.add(ringMesh);
+
+      const light = new THREE.PointLight(col, 4.0 * damageRatio, 9 * damageRatio);
+      light.position.set(tx, 1.0, ty);
+      this.fxGroup.add(light);
+
+      this.fxGroup.add(group);
+      const totalLife = 0.38;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          const sc = 1 + p * (2.6 * damageRatio);
+          ringMesh.scale.set(sc, sc, 1);
+          ringMat.opacity = Math.max(0, 0.85 * (1 - p));
+        },
+      });
+    } else if (type === 'atropos_void') {
+      const group = new THREE.Group();
+      group.position.set(tx, 0.02, ty);
+      const col = new THREE.Color(0xa855f7);
+
+      const ringGeom = new THREE.RingGeometry(0.2, 0.5 * damageRatio, 30);
+      const ringMat = new THREE.MeshBasicMaterial({ color: col, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      // Columna de hueso / energía estigia que brota del suelo
+      const pillarGeom = new THREE.CylinderGeometry(0.15 * damageRatio, 0.45 * damageRatio, 3.5 * damageRatio, 8);
+      const pillarMat = new THREE.MeshBasicMaterial({ color: 0x581c87, transparent: true, opacity: 0.85 });
+      const pillarMesh = new THREE.Mesh(pillarGeom, pillarMat);
+      pillarMesh.position.y = 1.75 * damageRatio;
+      group.add(pillarMesh);
+
+      const light = new THREE.PointLight(col, 7.0 * damageRatio, 12 * damageRatio);
+      light.position.set(tx, 1.5, ty);
+      this.fxGroup.add(light);
+
+      // Vapores y almas espectrales ascendiendo
+      const particles = [];
+      const pGeom = new THREE.OctahedronGeometry(0.045 * damageRatio);
+      const pMat = new THREE.MeshBasicMaterial({ color: 0xe9d5ff });
+      const pCount = Math.floor(20 * damageRatio);
+      for (let i = 0; i < pCount; i++) {
+        const pm = new THREE.Mesh(pGeom, pMat.clone());
+        pm.position.set(0, 0.2, 0);
+        group.add(pm);
+        const ang = Math.random() * Math.PI * 2;
+        const spd = (1.5 + Math.random() * 2.5) * damageRatio;
+        particles.push({
+          mesh: pm,
+          vx: Math.cos(ang) * spd,
+          vy: 2.0 + Math.random() * 4.5 * damageRatio,
+          vz: Math.sin(ang) * spd,
+        });
+      }
+
+      this.fxGroup.add(group);
+      const totalLife = 0.55;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        particles,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          const sc = 1 + p * (3.4 * damageRatio);
+          ringMesh.scale.set(sc, sc, 1);
+          ringMat.opacity = Math.max(0, 0.9 * (1 - p));
+          pillarMesh.scale.y = 1 + p * 0.5;
+          pillarMat.opacity = Math.max(0, 0.85 * (1 - p * 1.2));
+        },
+      });
+    } else if (type === 'erinias_slash') {
+      const group = new THREE.Group();
+      group.position.set(tx, 0.45, ty);
+      const slashCol = new THREE.Color(0xf472b6);
+      const slashMat = new THREE.MeshBasicMaterial({ color: slashCol, side: THREE.DoubleSide, transparent: true, opacity: 0.95 });
+
+      // Cuchillas cruzadas luminosas en 'X'
+      const len = 1.35 * damageRatio;
+      const w = 0.09 * damageRatio;
+      const b1 = new THREE.Mesh(new THREE.BoxGeometry(len, w, 0.04), slashMat);
+      b1.rotation.z = Math.PI / 4;
+      const b2 = new THREE.Mesh(new THREE.BoxGeometry(len, w, 0.04), slashMat);
+      b2.rotation.z = -Math.PI / 4;
+      group.add(b1, b2);
+
+      const light = new THREE.PointLight(slashCol, 5.5 * damageRatio, 9 * damageRatio);
+      light.position.set(tx, 1.0, ty);
+      this.fxGroup.add(light);
+
+      const particles = [];
+      const pGeom = new THREE.OctahedronGeometry(0.04 * damageRatio);
+      const pMat = new THREE.MeshBasicMaterial({ color: 0xfce7f3 });
+      const pCount = Math.floor(16 * damageRatio);
+      for (let i = 0; i < pCount; i++) {
+        const pm = new THREE.Mesh(pGeom, pMat.clone());
+        pm.position.set(0, 0, 0);
+        group.add(pm);
+        const ang = Math.random() * Math.PI * 2;
+        const spd = (2.5 + Math.random() * 4.0) * damageRatio;
+        particles.push({
+          mesh: pm,
+          vx: Math.cos(ang) * spd,
+          vy: 1.5 + Math.random() * 3.5,
+          vz: Math.sin(ang) * spd,
+        });
+      }
+
+      this.fxGroup.add(group);
+      const totalLife = 0.36;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        particles,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          const sc = 1 + p * 0.75;
+          b1.scale.set(sc, sc, 1);
+          b2.scale.set(sc, sc, 1);
+          slashMat.opacity = Math.max(0, 0.95 * (1 - p));
+        },
+      });
+    } else if (type === 'sentinel_burst') {
+      const group = new THREE.Group();
+      group.position.set(x, 0.35, y);
+      const ringGeom = new THREE.TorusGeometry(0.6 * damageRatio, 0.06 * damageRatio, 8, 24);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0xec4899, transparent: true, opacity: 0.85 });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.rotation.x = Math.PI / 2;
+      group.add(ringMesh);
+
+      const light = new THREE.PointLight(0xec4899, 4.0, 9);
+      light.position.set(x, 1.0, y);
+      this.fxGroup.add(light);
+
+      this.fxGroup.add(group);
+      const totalLife = 0.38;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          const sc = 1 + p * (3.0 * damageRatio);
+          ringMesh.scale.set(sc, sc, 1);
+          ringMat.opacity = Math.max(0, 0.85 * (1 - p));
+        },
+      });
+    } else if (type === 'earth_shatter') {
+      const group = new THREE.Group();
+      group.position.set(x, 0, y);
+      const rockMat = mat(0x78716c, { roughness: 0.9, metalness: 0.1 });
+      const numSpikes = Math.floor(10 + damageRatio * 3);
+      const spikes = [];
+
+      for (let i = 0; i < numSpikes; i++) {
+        const ang = (i / numSpikes) * Math.PI * 2 + (Math.random() - 0.5) * 0.2;
+        const rad = (1.5 + Math.random() * 1.3) * damageRatio;
+        const spikeH = (0.6 + Math.random() * 0.9) * damageRatio;
+        const spMesh = new THREE.Mesh(new THREE.ConeGeometry(0.16 * damageRatio, spikeH, 5), rockMat);
+        spMesh.position.set(Math.cos(ang) * rad, spikeH * 0.5, Math.sin(ang) * rad);
+        spMesh.rotation.x = (Math.random() - 0.5) * 0.35;
+        spMesh.rotation.z = (Math.random() - 0.5) * 0.35;
+        group.add(spMesh);
+        spikes.push(spMesh);
+      }
+
+      const light = new THREE.PointLight(0x84cc16, 5.5 * damageRatio, 11 * damageRatio);
+      light.position.set(x, 1.4, y);
+      this.fxGroup.add(light);
+
+      const particles = [];
+      const pGeom = new THREE.BoxGeometry(0.08 * damageRatio, 0.08 * damageRatio, 0.08 * damageRatio);
+      const pMat = mat(0x57534e);
+      const pCount = Math.floor(18 * damageRatio);
+      for (let i = 0; i < pCount; i++) {
+        const pm = new THREE.Mesh(pGeom, pMat);
+        pm.position.set(0, 0.2, 0);
+        group.add(pm);
+        const ang = Math.random() * Math.PI * 2;
+        const spd = (2.2 + Math.random() * 4.0) * damageRatio;
+        particles.push({
+          mesh: pm,
+          vx: Math.cos(ang) * spd,
+          vy: 2.5 + Math.random() * 4.5 * damageRatio,
+          vz: Math.sin(ang) * spd,
+        });
+      }
+
+      this.fxGroup.add(group);
+      const totalLife = 0.55;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        particles,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          if (p > 0.45) {
+            for (const sp of spikes) {
+              sp.position.y -= dt * 1.5;
+            }
+          }
+        },
+      });
+    } else if (type === 'licaon_roar') {
+      const group = new THREE.Group();
+      group.position.set(x, 0.1, y);
+      const ringGeom = new THREE.TorusGeometry(0.6 * damageRatio, 0.08 * damageRatio, 8, 24);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0x84cc16, transparent: true, opacity: 0.85 });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.rotation.x = Math.PI / 2;
+      group.add(ringMesh);
+
+      // Zarpazo de garras espectrales
+      const clawMat = new THREE.MeshBasicMaterial({ color: 0xa3e635, transparent: true, opacity: 0.9 });
+      for (let c = -1; c <= 1; c++) {
+        const claw = new THREE.Mesh(new THREE.BoxGeometry(0.8 * damageRatio, 0.05, 0.02), clawMat);
+        claw.position.set(c * 0.22 * damageRatio, 0.35, 0.5 * damageRatio);
+        claw.rotation.y = -Math.PI / 6;
+        group.add(claw);
+      }
+
+      const light = new THREE.PointLight(0x84cc16, 4.5 * damageRatio, 9 * damageRatio);
+      light.position.set(x, 1.2, y);
+      this.fxGroup.add(light);
+
+      this.fxGroup.add(group);
+      const totalLife = 0.42;
+      this.activeVFX.push({
+        mesh: group,
+        light,
+        maxLife: totalLife,
+        life: totalLife,
+        baseLightIntensity: light.intensity,
+        update: (dt, p) => {
+          const sc = 1 + p * (3.5 * damageRatio);
+          ringMesh.scale.set(sc, sc, 1);
+          ringMat.opacity = Math.max(0, 0.85 * (1 - p));
+          clawMat.opacity = Math.max(0, 0.9 * (1 - p));
+        },
+      });
+    }
+  }
+
+  _updateVFX(dt) {
+    if (!this.activeVFX || this.activeVFX.length === 0) return;
+    for (let i = this.activeVFX.length - 1; i >= 0; i--) {
+      const vfx = this.activeVFX[i];
+      vfx.life -= dt;
+      const p = 1 - Math.max(0, vfx.life / vfx.maxLife);
+
+      if (vfx.update) {
+        vfx.update(dt, p);
+      }
+
+      if (vfx.particles && vfx.particles.length > 0) {
+        for (const pt of vfx.particles) {
+          pt.mesh.position.x += pt.vx * dt;
+          pt.mesh.position.y += pt.vy * dt;
+          pt.mesh.position.z += pt.vz * dt;
+          pt.vy -= 15.0 * dt;
+          if (pt.mesh.position.y < 0.03) {
+            pt.mesh.position.y = 0.03;
+            pt.vx *= 0.65;
+            pt.vz *= 0.65;
+            pt.vy = 0;
+          }
+          if (pt.mesh.material) {
+            pt.mesh.material.opacity = Math.max(0, 1 - p * 1.25);
+            pt.mesh.material.transparent = true;
+          }
+        }
+      }
+
+      if (vfx.light) {
+        vfx.light.intensity = Math.max(0, vfx.baseLightIntensity * (1 - p));
+      }
+
+      if (vfx.life <= 0) {
+        if (vfx.mesh) {
+          this.fxGroup.remove(vfx.mesh);
+          disposeObject3D(vfx.mesh);
+        }
+        if (vfx.light) {
+          this.fxGroup.remove(vfx.light);
+        }
+        this.activeVFX.splice(i, 1);
+      }
     }
   }
 
@@ -1262,6 +1982,9 @@ export class ArchRenderer3D {
     this._syncGroundDrops(groundDrops, now);
     this._syncProjectiles(projectiles);
 
+    // 8. Actualizar efectos visuales 3D y partículas de habilidades
+    this._updateVFX(dt);
+
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -1269,6 +1992,7 @@ export class ArchRenderer3D {
     while (this.dropMeshes.length > groundDrops.length) {
       const m = this.dropMeshes.pop();
       this.fxGroup.remove(m);
+      disposeObject3D(m);
     }
     while (this.dropMeshes.length < groundDrops.length) {
       const m = new THREE.Mesh(
@@ -1293,23 +2017,43 @@ export class ArchRenderer3D {
     while (this.projMeshes.length > projectiles.length) {
       const m = this.projMeshes.pop();
       this.fxGroup.remove(m);
+      disposeObject3D(m);
     }
     while (this.projMeshes.length < projectiles.length) {
-      const m = new THREE.Mesh(
-        new THREE.ConeGeometry(0.065, 0.34, 6),
-        mat(0x38bdf8, { emissive: 0x38bdf8, emissiveIntensity: 1.2 })
+      const group = new THREE.Group();
+      // Núcleo luminoso del proyectil
+      const head = new THREE.Mesh(
+        new THREE.ConeGeometry(0.08, 0.38, 6),
+        mat(0x38bdf8, { emissive: 0x38bdf8, emissiveIntensity: 1.6, roughness: 0.2 })
       );
-      this.fxGroup.add(m);
-      this.projMeshes.push(m);
+      head.rotation.x = Math.PI / 2;
+      group.add(head);
+
+      // Cola / estela luminosa
+      const tail = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.065, 0.32, 5),
+        mat(0xffffff, { emissive: 0x38bdf8, emissiveIntensity: 1.2, transparent: true, opacity: 0.75 })
+      );
+      tail.rotation.x = Math.PI / 2;
+      tail.position.z = -0.22;
+      group.add(tail);
+
+      group.userData = { head, tail };
+      this.fxGroup.add(group);
+      this.projMeshes.push(group);
     }
     for (let i = 0; i < projectiles.length; i++) {
       const p = projectiles[i];
       const m = this.projMeshes[i];
-      m.material.color.set(p.color || '#38bdf8');
-      m.material.emissive.set(p.color || '#38bdf8');
+      const col = p.color || '#38bdf8';
+      m.userData.head.material.color.set(col);
+      m.userData.head.material.emissive.set(col);
+      m.userData.tail.material.emissive.set(col);
       m.position.set(p.x, 0.32, p.y);
       const ang = Math.atan2(p.vx, p.vy);
-      m.rotation.set(Math.PI / 2, 0, -ang);
+      m.rotation.y = -ang + Math.PI / 2;
+      const s = p.pierce ? 1.4 : 1.0;
+      m.scale.set(s, s, s);
     }
   }
 }
