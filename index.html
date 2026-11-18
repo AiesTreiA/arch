@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ARCH — Mitos Griegos ARPG</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <span class="brand">⚔ ARCH</span>
+      <span id="floorLabel" class="controls-hint">Piso 1</span>
+    </div>
+    <div class="controls-hint">WASD / Clic: mover y atacar · Espacio: golpear · Q / E: habilidades · 1: poción · F: altar / cofre / bajar</div>
+    <div>
+      <button id="btnNewRun" class="primary">Nueva partida</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="stage">
+      <canvas id="gameCanvas"></canvas>
+      <div id="startModal" class="modal">
+        <div class="modal-box">
+          <h2 style="margin:0 0 6px;color:var(--gold)">ARCH — Ecos del Olimpo y Tártaro</h2>
+          <p style="margin:0 0 12px;color:var(--muted);font-size:13px">
+            Prototipo v0.1 por ingeniería inversa de Diablo II (mapas procedurales, afijos, reliquias y combate isométrico).
+          </p>
+          <div class="class-grid" id="classGrid"></div>
+          <div class="stat-row" style="margin-top:10px">
+            <label for="seedInput">Semilla:</label>
+            <input id="seedInput" value="olimpia-01" style="flex:1;background:#090b10;color:#fff;border:1px solid var(--border);padding:5px 8px;border-radius:6px" />
+            <button id="btnStart" class="primary">Descender</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside>
+      <div class="card">
+        <h3 id="heroTitle">Héroe</h3>
+        <div>Salud <span id="hpText"></span></div>
+        <div class="bar bar-hp"><div id="hpBar"></div></div>
+        <div>Fervor <span id="manaText"></span></div>
+        <div class="bar bar-mana"><div id="manaBar"></div></div>
+        <div>Experiencia <span id="xpText"></span></div>
+        <div class="bar bar-xp"><div id="xpBar"></div></div>
+        <div class="stat-row">
+          <span>Dracmas: <strong id="goldText">0</strong></span>
+          <button id="btnPotion">Ambrosía [1] (<span id="potText">3</span>)</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Habilidades</h3>
+        <div class="stat-row"><button id="btnSkillQ"></button></div>
+        <div class="stat-row"><button id="btnSkillE"></button></div>
+      </div>
+
+      <div class="card">
+        <h3>Atributos <span id="ptsText" style="color:#facc15"></span></h3>
+        <div id="statsBox"></div>
+      </div>
+
+      <div class="card">
+        <h3>Equipo</h3>
+        <div id="equipBox"></div>
+      </div>
+
+      <div class="card">
+        <h3>Mochila (clic equipa)</h3>
+        <div id="invBox"></div>
+      </div>
+
+      <div class="card">
+        <h3>Crónica</h3>
+        <ul id="logBox" class="log-list"></ul>
+      </div>
+    </aside>
+  </main>
+
+  <script type="module">
+    import { HERO_CLASSES } from './src/core/combat.js';
+    import { ArchGame } from './src/game/engine.js';
+
+    let selectedClass = 'hoplita';
+    const classGrid = document.getElementById('classGrid');
+    const modal = document.getElementById('startModal');
+
+    function renderClassCards() {
+      classGrid.innerHTML = '';
+      for (const cls of Object.values(HERO_CLASSES)) {
+        const btn = document.createElement('button');
+        btn.className = `class-card ${cls.id === selectedClass ? 'selected' : ''}`;
+        btn.innerHTML = `<strong style="color:${cls.color}">${cls.name}</strong><div style="font-size:11px;color:#94a3b8;margin-top:4px">${cls.subtitle}</div>`;
+        btn.onclick = () => { selectedClass = cls.id; renderClassCards(); };
+        classGrid.appendChild(btn);
+      }
+    }
+    renderClassCards();
+
+    const game = new ArchGame({
+      canvas: document.getElementById('gameCanvas'),
+      onUiUpdate(state) {
+        const { hero, derived, floor, biome, log, skills } = state;
+        document.getElementById('floorLabel').textContent = `Piso ${floor} · ${biome}`;
+        document.getElementById('heroTitle').textContent = `${hero.name} (Nv. ${hero.level})`;
+        document.getElementById('hpText').textContent = `${hero.hp}/${derived.maxHp}`;
+        document.getElementById('hpBar').style.width = `${Math.max(0, (hero.hp / derived.maxHp) * 100)}%`;
+        document.getElementById('manaText').textContent = `${Math.floor(hero.mana)}/${derived.maxMana}`;
+        document.getElementById('manaBar').style.width = `${Math.max(0, (hero.mana / derived.maxMana) * 100)}%`;
+        document.getElementById('xpText').textContent = `${hero.xp}/${hero.xpNext}`;
+        document.getElementById('xpBar').style.width = `${Math.min(100, (hero.xp / hero.xpNext) * 100)}%`;
+        document.getElementById('goldText').textContent = hero.gold;
+        document.getElementById('potText').textContent = hero.potions;
+        document.getElementById('btnSkillQ').textContent = `[Q] ${skills.q.name} (${skills.q.cost})`;
+        document.getElementById('btnSkillE').textContent = `[E] ${skills.e.name} (${skills.e.cost})`;
+        document.getElementById('ptsText').textContent = hero.statPoints > 0 ? `(+${hero.statPoints})` : '';
+
+        const statsBox = document.getElementById('statsBox');
+        statsBox.innerHTML = '';
+        const labels = { strength: 'Fuerza', dexterity: 'Destreza', spirit: 'Espíritu', vitality: 'Vitalidad' };
+        for (const [k, lbl] of Object.entries(labels)) {
+          const row = document.createElement('div');
+          row.className = 'stat-row';
+          row.innerHTML = `<span>${lbl}: <strong>${derived.stats[k]}</strong></span>`;
+          if (hero.statPoints > 0) {
+            const b = document.createElement('button');
+            b.textContent = '+';
+            b.onclick = () => game.allocateStat(k);
+            row.appendChild(b);
+          }
+          statsBox.appendChild(row);
+        }
+        const dmgRow = document.createElement('div');
+        dmgRow.className = 'stat-row';
+        dmgRow.innerHTML = `<span>Daño: ${derived.minDamage}–${derived.maxDamage}</span><span>Arm: ${derived.armor}</span>`;
+        statsBox.appendChild(dmgRow);
+
+        const equipBox = document.getElementById('equipBox');
+        equipBox.innerHTML = '';
+        for (const [slot, lbl] of [['weapon', 'Arma'], ['armor', 'Armadura'], ['charm', 'Reliquia']]) {
+          const it = hero.equipment[slot];
+          const row = document.createElement('div');
+          row.className = 'item-row';
+          row.innerHTML = `<span style="color:#94a3b8">${lbl}:</span><span style="color:${it ? it.color : '#64748b'}">${it ? it.name : '—'}</span>`;
+          equipBox.appendChild(row);
+        }
+
+        const invBox = document.getElementById('invBox');
+        invBox.innerHTML = hero.inventory.length === 0 ? '<div style="color:#64748b">Vacía</div>' : '';
+        for (const it of hero.inventory) {
+          const row = document.createElement('div');
+          row.className = 'item-row';
+          const btn = document.createElement('button');
+          btn.style.color = it.color;
+          btn.style.flex = '1';
+          btn.style.textAlign = 'left';
+          btn.textContent = it.name;
+          btn.onclick = () => game.equipItem(it.id);
+          const del = document.createElement('button');
+          del.textContent = '×';
+          del.onclick = () => game.dropInventoryItem(it.id);
+          row.append(btn, del);
+          invBox.appendChild(row);
+        }
+
+        const logBox = document.getElementById('logBox');
+        logBox.innerHTML = log.map((l) => `<li>${l}</li>`).join('');
+      },
+    });
+
+    document.getElementById('btnStart').onclick = () => {
+      modal.classList.add('hidden');
+      game.startNewGame({ classId: selectedClass, seed: document.getElementById('seedInput').value });
+    };
+    document.getElementById('btnNewRun').onclick = () => modal.classList.remove('hidden');
+    document.getElementById('btnPotion').onclick = () => game.usePotion();
+    document.getElementById('btnSkillQ').onclick = () => game.castSkill('q');
+    document.getElementById('btnSkillE').onclick = () => game.castSkill('e');
+  </script>
+</body>
+</html>
