@@ -113,7 +113,6 @@ export function createHeroMesh3D(classId = 'hoplita') {
   torsoPivot.position.set(0, 0.36, 0);
   bodyGroup.add(torsoPivot);
 
-  const isRobed = classId === 'oraculo' || classId === 'necromante';
   const isBroad = classId === 'campeon' || classId === 'hoplita' || classId === 'coribante';
   const chestW = isBroad ? 0.3 : 0.24;
   const chestD = isBroad ? 0.19 : 0.16;
@@ -125,26 +124,21 @@ export function createHeroMesh3D(classId = 'hoplita') {
   torsoMesh.position.y = 0.18;
   torsoPivot.add(torsoMesh);
 
-  // Cinturón y faldellín / túnica
+  // Cinturón y faldellín / túnica griega
   const belt = new THREE.Mesh(new THREE.CylinderGeometry(chestW * 0.56, chestW * 0.62, 0.08, 8), goldMat);
   belt.position.y = 0.03;
   torsoPivot.add(belt);
 
-  if (isRobed) {
-    const robeSkirt = new THREE.Mesh(
-      new THREE.ConeGeometry(0.24, 0.38, 10, 1, true),
-      classId === 'necromante' ? darkClothMat : primaryMat
-    );
-    robeSkirt.position.y = -0.14;
-    torsoPivot.add(robeSkirt);
-  } else {
-    const skirt = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.14, 0.2, 0.16, 8),
-      classId === 'hoplita' || classId === 'campeon' ? leatherMat : primaryMat
-    );
-    skirt.position.y = -0.05;
-    torsoPivot.add(skirt);
-  }
+  const skirt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.14, 0.2, 0.16, 8),
+    classId === 'hoplita' || classId === 'campeon'
+      ? leatherMat
+      : classId === 'necromante'
+      ? darkClothMat
+      : primaryMat
+  );
+  skirt.position.y = -0.05;
+  torsoPivot.add(skirt);
 
   // Capa dorsal articulada
   const capePivot = new THREE.Group();
