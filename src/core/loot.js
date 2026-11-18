@@ -1,5 +1,5 @@
 /**
- * loot.js — Motor de botín, rarezas y afijos estilo Diablo II adaptado a mitos griegos.
+ * loot.js — Motor de botín, Treasure Classes (TC), objetos exclusivos de las 7 clases y afijos estilo Diablo II.
  */
 import { createRng } from './rng.js';
 
@@ -10,7 +10,14 @@ export const RARITY = {
   unique: { id: 'unique', label: 'Reliquia Única', color: '#f97316', affixes: [0, 0] },
 };
 
-const BASE_ITEMS = [
+/** Treasure Classes (TC) al estilo Diablo II según rango de enemigo y acto. */
+export const TREASURE_CLASSES = {
+  normal: { id: 'TC_Styx_Normal', dropChance: 0.36, itemCount: 1, classItemChance: 0.22 },
+  champion: { id: 'TC_Styx_Champion', dropChance: 0.75, itemCount: 1, classItemChance: 0.38 },
+  boss: { id: 'TC_Styx_Boss', dropChance: 1.0, itemCount: 2, classItemChance: 0.55 },
+};
+
+export const BASE_ITEMS = [
   { key: 'xiphos', name: 'Xiphos de Bronce', slot: 'weapon', baseDamage: [6, 10], baseArmor: 0 },
   { key: 'dory', name: 'Lanza Dory', slot: 'weapon', baseDamage: [8, 12], baseArmor: 0 },
   { key: 'bow', name: 'Arco de Tejo', slot: 'weapon', baseDamage: [7, 11], baseArmor: 0 },
@@ -21,12 +28,80 @@ const BASE_ITEMS = [
   { key: 'sandals', name: 'Grebas de Maratón', slot: 'charm', baseDamage: [0, 0], baseArmor: 6, speedBonus: 0.25 },
 ];
 
+/** Objetos exclusivos de las 7 clases griegas (con +Talentos implícito estilo D2 class-specific items). */
+export const CLASS_BASE_ITEMS = {
+  campeon: {
+    key: 'helm_thrace',
+    forClass: 'campeon',
+    name: 'Yelmo Tracio de Ares',
+    slot: 'charm',
+    baseDamage: [0, 0],
+    baseArmor: 12,
+    implicitMods: { strength: 3, skillBonus: 1 },
+  },
+  hoplita: {
+    key: 'aspis_sparta',
+    forClass: 'hoplita',
+    name: 'Aspis Lacedemonio',
+    slot: 'charm',
+    baseDamage: [0, 0],
+    baseArmor: 16,
+    implicitMods: { armor: 6, skillBonus: 1 },
+  },
+  arquera: {
+    key: 'bow_ortygia',
+    forClass: 'arquera',
+    name: 'Arco Reflex de Ortigia',
+    slot: 'weapon',
+    baseDamage: [9, 14],
+    baseArmor: 0,
+    implicitMods: { dexterity: 3, critChance: 0.04, skillBonus: 1 },
+  },
+  oraculo: {
+    key: 'orb_pythia',
+    forClass: 'oraculo',
+    name: 'Orbe Pitio de Delfos',
+    slot: 'weapon',
+    baseDamage: [6, 11],
+    baseArmor: 0,
+    implicitMods: { spirit: 4, maxMana: 14, skillBonus: 1 },
+  },
+  necromante: {
+    key: 'obol_styx',
+    forClass: 'necromante',
+    name: 'Óbolo Órfico del Estigia',
+    slot: 'charm',
+    baseDamage: [0, 0],
+    baseArmor: 9,
+    implicitMods: { spirit: 3, lifeOnHit: 3, skillBonus: 1 },
+  },
+  sombra: {
+    key: 'katar_erinyes',
+    forClass: 'sombra',
+    name: 'Katar de las Erinias',
+    slot: 'weapon',
+    baseDamage: [8, 13],
+    baseArmor: 0,
+    implicitMods: { dexterity: 3, speedBonus: 0.2, skillBonus: 1 },
+  },
+  coribante: {
+    key: 'pelt_lycaon',
+    forClass: 'coribante',
+    name: 'Máscara de Licaón',
+    slot: 'charm',
+    baseDamage: [0, 0],
+    baseArmor: 11,
+    implicitMods: { vitality: 4, spirit: 2, skillBonus: 1 },
+  },
+};
+
 const PREFIXES = [
   { name: 'Ígneo', stat: 'damageFlat', min: 2, max: 6, slots: ['weapon'] },
   { name: 'Olímpico', stat: 'maxHp', min: 14, max: 32, slots: ['armor', 'charm'] },
   { name: 'De Bronce Templado', stat: 'armor', min: 6, max: 16, slots: ['armor', 'charm'] },
   { name: 'Fulgurante', stat: 'spirit', min: 2, max: 6, slots: ['weapon', 'charm', 'armor'] },
   { name: 'Implacable', stat: 'strength', min: 2, max: 5, slots: ['weapon', 'armor'] },
+  { name: 'Hierofántico', stat: 'skillBonus', min: 1, max: 2, noScale: true, slots: ['weapon', 'charm'] },
 ];
 
 const SUFFIXES = [
@@ -35,6 +110,7 @@ const SUFFIXES = [
   { name: 'del Titán', stat: 'vitality', min: 2, max: 6 },
   { name: 'del Relámpago', stat: 'critChance', min: 0.03, max: 0.09, float: true },
   { name: 'del Sanguinario', stat: 'lifeOnHit', min: 2, max: 6 },
+  { name: 'del Arconte', stat: 'skillBonus', min: 1, max: 1, noScale: true },
 ];
 
 const RARE_TITLES = [
@@ -44,42 +120,80 @@ const RARE_TITLES = [
   'Manto de la Esfinge',
   'Sello de Creta',
   'Filo de Teseo',
+  'Pacto del Aqueronte',
+  'Corona de las Moiras',
 ];
 
-const UNIQUE_RELICS = [
+export const UNIQUE_RELICS = [
   {
     name: 'Lanza de Aquiles',
     slot: 'weapon',
+    forClass: 'campeon',
     baseDamage: [14, 21],
-    mods: { strength: 6, critChance: 0.1, lifeOnHit: 5 },
+    mods: { strength: 6, critChance: 0.1, lifeOnHit: 5, skillBonus: 1 },
     lore: 'Forjada para atravesar murallas en Troya.',
   },
   {
     name: 'Égida de Atenea',
     slot: 'armor',
+    forClass: 'hoplita',
     baseArmor: 28,
-    mods: { armor: 18, maxHp: 45, vitality: 5 },
+    mods: { armor: 18, maxHp: 45, vitality: 5, skillBonus: 1 },
     lore: 'Resiste incluso el aliento de la Gorgona.',
+  },
+  {
+    name: 'Arco de Apolo y Artemisa',
+    slot: 'weapon',
+    forClass: 'arquera',
+    baseDamage: [13, 20],
+    mods: { dexterity: 7, critChance: 0.12, speedBonus: 0.35, skillBonus: 2 },
+    lore: 'Sus flechas plateadas jamás yerran en la penumbra.',
+  },
+  {
+    name: 'Caduceo de Delfos',
+    slot: 'weapon',
+    forClass: 'oraculo',
+    baseDamage: [10, 16],
+    mods: { spirit: 8, maxMana: 35, critChance: 0.08, skillBonus: 2 },
+    lore: 'Canaliza los presagios y el rayo de Zeus.',
+  },
+  {
+    name: 'Cetro de Hades y Perséfone',
+    slot: 'weapon',
+    forClass: 'necromante',
+    baseDamage: [11, 17],
+    mods: { spirit: 7, lifeOnHit: 6, maxMana: 28, skillBonus: 2 },
+    lore: 'Las sombras del Estigia obedecen a su portador.',
+  },
+  {
+    name: 'Colmillo de Tisífone',
+    slot: 'weapon',
+    forClass: 'sombra',
+    baseDamage: [12, 19],
+    mods: { dexterity: 6, critChance: 0.14, speedBonus: 0.45, skillBonus: 2 },
+    lore: 'Templado en las lágrimas de los culpables en el Érebo.',
+  },
+  {
+    name: 'Piel Sagrada de Calisto',
+    slot: 'armor',
+    forClass: 'coribante',
+    baseArmor: 24,
+    mods: { vitality: 7, spirit: 5, maxHp: 50, skillBonus: 2 },
+    lore: 'Quien la viste escucha el latido primordial de Gea.',
   },
   {
     name: 'Sandalias de Hermes',
     slot: 'charm',
     baseArmor: 10,
-    mods: { dexterity: 7, speedBonus: 0.65, critChance: 0.06 },
+    mods: { dexterity: 7, speedBonus: 0.65, critChance: 0.06, skillBonus: 1 },
     lore: 'Quien las calza cruza el Estigia antes que la sombra.',
-  },
-  {
-    name: 'Caduceo de Delfos',
-    slot: 'weapon',
-    baseDamage: [10, 16],
-    mods: { spirit: 8, maxMana: 35, critChance: 0.08 },
-    lore: 'Canaliza los presagios y el rayo de Zeus.',
   },
 ];
 
 let nextItemId = 1;
 
-function rollRange(rng, min, max, isFloat = false, ilvl = 1) {
+function rollRange(rng, min, max, isFloat = false, ilvl = 1, noScale = false) {
+  if (noScale) return rng.int(min, max);
   const scale = 1 + (Math.max(1, ilvl) - 1) * 0.14;
   if (isFloat) {
     const val = min + rng.next() * (max - min);
@@ -98,21 +212,51 @@ function rollRarity(rng, tier = 'normal', ilvl = 1) {
   ]);
 }
 
+/** Crea el arma/amuleto de iniciado con el que comienza cada clase en el Campamento del Aqueronte. */
+export function createStarterItem(classId = 'hoplita') {
+  const clsBase = CLASS_BASE_ITEMS[classId] || CLASS_BASE_ITEMS.hoplita;
+  return {
+    id: `itm-starter-${classId}-${nextItemId++}`,
+    name: `${clsBase.name} de Iniciado`,
+    slot: clsBase.slot,
+    forClass: clsBase.forClass,
+    rarity: 'magic',
+    rarityLabel: 'Reliquia de Iniciado',
+    color: '#60a5fa',
+    ilvl: 1,
+    baseDamage: [...clsBase.baseDamage],
+    baseArmor: clsBase.baseArmor,
+    mods: { ...clsBase.implicitMods },
+    lore: 'Entregado junto a la hoguera del Aqueronte antes del descenso.',
+  };
+}
+
 /**
- * Genera un objeto equipable estilo Diablo II con rareza, afijos escalados y stats derivados.
+ * Genera un objeto equipable estilo Diablo II con rareza, Treasure Class, objetos de clase y afijos.
  */
-export function generateItem({ level = 1, tier = 'normal', seed = null, forceRarity = null } = {}) {
+export function generateItem({
+  level = 1,
+  tier = 'normal',
+  seed = null,
+  forceRarity = null,
+  preferredClass = null,
+  forceClassItem = false,
+} = {}) {
   const rng = createRng(seed ?? `item:${level}:${tier}:${nextItemId}`);
   const ilvl = Math.max(1, Number(level) || 1);
   const rarityKey = forceRarity && RARITY[forceRarity] ? forceRarity : rollRarity(rng, tier, ilvl);
   const rarity = RARITY[rarityKey];
+  const tc = TREASURE_CLASSES[tier] || TREASURE_CLASSES.normal;
 
   if (rarityKey === 'unique') {
-    const relic = rng.pick(UNIQUE_RELICS);
+    const classPool = preferredClass ? UNIQUE_RELICS.filter((u) => u.forClass === preferredClass) : [];
+    const relic = classPool.length > 0 && rng.chance(0.65) ? rng.pick(classPool) : rng.pick(UNIQUE_RELICS);
     return {
       id: `itm-${nextItemId++}`,
       name: relic.name,
       slot: relic.slot,
+      forClass: relic.forClass || null,
+      treasureClass: tc.id,
       rarity: rarityKey,
       rarityLabel: rarity.label,
       color: rarity.color,
@@ -124,10 +268,18 @@ export function generateItem({ level = 1, tier = 'normal', seed = null, forceRar
     };
   }
 
-  const base = rng.pick(BASE_ITEMS);
-  const mods = {};
-  if (base.bonusSpirit) mods.spirit = base.bonusSpirit;
-  if (base.speedBonus) mods.speedBonus = base.speedBonus;
+  const classItemsList = Object.values(CLASS_BASE_ITEMS);
+  const useClassBase = forceClassItem || rng.chance(tc.classItemChance);
+  let base;
+  if (useClassBase) {
+    base = (preferredClass && CLASS_BASE_ITEMS[preferredClass]) || rng.pick(classItemsList);
+  } else {
+    base = rng.pick(BASE_ITEMS);
+  }
+
+  const mods = { ...(base.implicitMods || {}) };
+  if (base.bonusSpirit) mods.spirit = (mods.spirit || 0) + base.bonusSpirit;
+  if (base.speedBonus) mods.speedBonus = (mods.speedBonus || 0) + base.speedBonus;
 
   const [minAff, maxAff] = rarity.affixes;
   const targetAffixes = maxAff > 0 ? rng.int(minAff, maxAff) : 0;
@@ -142,7 +294,8 @@ export function generateItem({ level = 1, tier = 'normal', seed = null, forceRar
     const affix = rng.pick(pool);
     if (!affix) continue;
     usedStats.add(affix.stat);
-    mods[affix.stat] = (mods[affix.stat] || 0) + rollRange(rng, affix.min, affix.max, affix.float, ilvl);
+    mods[affix.stat] =
+      (mods[affix.stat] || 0) + rollRange(rng, affix.min, affix.max, affix.float, ilvl, affix.noScale);
     if (pickPrefix && !chosenPrefix) chosenPrefix = affix.name;
     if (!pickPrefix && !chosenSuffix) chosenSuffix = affix.name;
   }
@@ -159,6 +312,8 @@ export function generateItem({ level = 1, tier = 'normal', seed = null, forceRar
     id: `itm-${nextItemId++}`,
     name,
     slot: base.slot,
+    forClass: base.forClass || null,
+    treasureClass: tc.id,
     rarity: rarityKey,
     rarityLabel: rarity.label,
     color: rarity.color,
@@ -170,20 +325,19 @@ export function generateItem({ level = 1, tier = 'normal', seed = null, forceRar
   };
 }
 
-/** Decide qué botín (oro, poción o ítem) suelta un enemigo derrotado. */
-export function rollEnemyDrop({ level = 1, tier = 'normal', seed = null } = {}) {
+/** Decide qué botín (oro, poción o ítem) suelta un enemigo derrotado usando su Treasure Class. */
+export function rollEnemyDrop({ level = 1, tier = 'normal', seed = null, preferredClass = null } = {}) {
   const rng = createRng(seed ?? `drop:${level}:${tier}:${nextItemId}`);
+  const tc = TREASURE_CLASSES[tier] || TREASURE_CLASSES.normal;
   const drops = [];
   const gold = rng.int(5, 16) * level * (tier === 'boss' ? 5 : tier === 'champion' ? 2 : 1);
   drops.push({ kind: 'gold', amount: gold });
 
-  const dropChance = tier === 'boss' ? 1 : tier === 'champion' ? 0.72 : 0.34;
-  if (rng.chance(dropChance)) {
-    const itemCount = tier === 'boss' ? 2 : 1;
-    for (let i = 0; i < itemCount; i++) {
+  if (rng.chance(tc.dropChance)) {
+    for (let i = 0; i < tc.itemCount; i++) {
       drops.push({
         kind: 'item',
-        item: generateItem({ level, tier, seed: `${seed || 'd'}:${i}:${nextItemId}` }),
+        item: generateItem({ level, tier, preferredClass, seed: `${seed || 'd'}:${i}:${nextItemId}` }),
       });
     }
   }

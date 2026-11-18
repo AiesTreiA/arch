@@ -157,6 +157,22 @@ export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'ar
     }
   }
 
+  if (chests.length === 0 && rooms.length >= 2) {
+    const chestRoom = rooms[1] !== exitRoom ? rooms[1] : rooms[0];
+    chests.push({
+      x: chestRoom.cx + 0.5,
+      y: chestRoom.cy + 0.5,
+      opened: false,
+    });
+  }
+
+  const npc = {
+    name: level === 1 ? 'Sibila de Cumas' : 'Sombra de Tiresias',
+    x: Math.min(startRoom.x + startRoom.w - 1.5, startRoom.cx + 1.5),
+    y: startRoom.cy + 0.5,
+    talked: false,
+  };
+
   const biome = BIOMES[(level - 1) % BIOMES.length];
 
   return {
@@ -168,6 +184,7 @@ export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'ar
     explored,
     rooms,
     spawn: { x: startRoom.cx + 0.5, y: startRoom.cy + 0.5 },
+    npc,
     stairs: { x: exitRoom.cx, y: exitRoom.cy },
     shrine,
     chests,

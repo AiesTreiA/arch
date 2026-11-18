@@ -18,14 +18,18 @@ Este documento descompone los **7 sistemas algorítmicos** que hicieron legendar
   2. Conexión garantizada mediante corredor en L entre centros consecutivos (árbol generador mínimo implícito: **100% de las salas son alcanzables**).
   3. Marcado semántico de hitos: *Entrada*, *Altar de Hermes / Santuario de Asclepio* (curación), *Cofre del Tesoro*, *Escalera al Tártaro* (sala más lejana) y oleadas de monstruos según distancia.
 
-## 3. Arquetipos (3 Clases Griegas) y Atributos
-Cada clase parte con estadísticas diferenciadas y 2 habilidades activas iniciales (expandible a 3 ramas × 3 poderes):
+## 3. Arquetipos (7 Clases Griegas 1:1 con *Diablo II*) y Atributos
+Cada clase parte con estadísticas, escalado de salud/fervor y 3 ramas de talentos diferenciadas (ver desglose completo en [`docs/ARCHETYPES.md`](./ARCHETYPES.md)):
 
-| Clase | Análogo D2 | Rol | Habilidad Q | Habilidad E |
+| Clase (`classId`) | Análogo D2 | Rol | Habilidad Q | Habilidad E |
 |---|---|---|---|---|
-| **Hoplita de Esparta** | Bárbaro / Paladín | Tanque cuerpo a cuerpo | **Golpe de Égida** (cono + empuje) | **Furia de Ares** (+daño y velocidad temporal) |
-| **Arquera de Artemisa** | Amazona / Asesina | Daño a distancia y control | **Flecha Lunar** (proyectil perforante) | **Paso de Cierva** (esquive + disparo ralentizador) |
-| **Oráculo de Delfos** | Hechicera / Nigromante | Daño elemental y área | **Rayo de Zeus** (impacto en área) | **Égida Etérea** (escudo que absorbe daño) |
+| **Campeón de Ares** (`campeon`) | Bárbaro | Berserker físico y gritos | **Torbellino Tracio** (giro 360° + robo de vida) | **Grito de Fobos** (empuje + +45% daño/velocidad) |
+| **Hoplita de Esparta** (`hoplita`) | Paladín | Tanque de égida y auras | **Golpe de Égida** (cono + empuje) | **Aura de Apolo** (pulso solar + armadura y fervor) |
+| **Cazadora de Artemisa** (`arquera`) | Amazona | Daño a distancia y crítico | **Flecha Lunar** (proyectil perforante) | **Salva de Ortigia** (abanico de 3 flechas + curación) |
+| **Oráculo de Delfos** (`oraculo`) | Hechicera | Daño tri-elemental y área | **Rayo de Zeus** (impacto en área) | **Égida Etérea** (escudo que absorbe daño) |
+| **Necromante del Estigia** (`necromante`) | Nigromante | Hueso, peste y maldiciones | **Lanza de Caronte** (proyectil óseo perforante) | **Condena de Átropos** (detonación + quiebra armadura) |
+| **Sombra de Némesis** (`sombra`) | Asesina | Crítico sombrío y trampas | **Filo de las Erinias** (paso sombrío + crítico) | **Centinela de Hefesto** (descarga múltiple + velocidad) |
+| **Coribante de Pan** (`coribante`) | Druida | Metamorfosis y cataclismo | **Cólera de Gea** (erupción sísmica radial) | **Forma de Licaón** (regeneración + furia licántropa) |
 
 - **Atributos primarios:** `Fuerza` (daño físico), `Destreza` (precisión/crítico/esquive), `Espíritu` (daño elemental y fervor/maná), `Vitalidad` (vida máxima).
 

@@ -11,6 +11,7 @@ import {
   updateVisibility,
 } from '../core/dungeon.js';
 import {
+  allocateSkillPoint,
   computeHeroDerived,
   createEnemy,
   createHero,
@@ -19,6 +20,7 @@ import {
   resolveStrike,
 } from '../core/combat.js';
 import { generateItem, rollEnemyDrop } from '../core/loot.js';
+import { ArchRenderer3D } from './models3d.js';
 
 const TILE_W = 56;
 const TILE_H = 28;
@@ -55,16 +57,21 @@ export class ArchGame {
     this.running = false;
     this.gameOver = false;
     this.lastTs = 0;
+    this.lastDt = 0.016;
     this.attackCdLeft = 0;
     this.skillQCd = 0;
     this.skillECd = 0;
     this.moveTarget = null;
     this.attackTargetId = null;
+    this.zoom = 1.15;
 
     this.hero = createHero('hoplita');
     this.pos = { x: 4, y: 4 };
     this.cam = { x: 0, y: 0 };
     this.dungeon = null;
+
+    this.renderer3d = new ArchRenderer3D(this.canvas);
+    this.renderer3d.setZoom(this.zoom);
 
     this._bindEvents();
     this._resize();
@@ -73,6 +80,7 @@ export class ArchGame {
   _bindEvents() {
     window.addEventListener('resize', () => this._resize());
     window.addEventListener('keydown', (e) => {
+      if (e.target && ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
       const k = e.key.toLowerCase();
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) {
         if (this.running) e.preventDefault();
@@ -87,14 +95,36 @@ export class ArchGame {
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
 
+    this.canvas.addEventListener(
+      'wheel',
+      (e) => {
+        if (!this.running) return;
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.12 : -0.12;
+        this.zoom = Math.max(0.8, Math.min(2.0, Number((this.zoom + delta).toFixed(2))));
+        this.renderer3d?.setZoom(this.zoom);
+      },
+      { passive: false }
+    );
+
     this.canvas.addEventListener('mousedown', (e) => {
       if (!this.running || this.gameOver) return;
       const rect = this.canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
-      const worldX = sx - this.viewW / 2 + this.cam.x;
-      const worldY = sy - this.viewH / 2 + this.cam.y;
+      const worldX = (sx - this.viewW / 2) / this.zoom + this.cam.x;
+      const worldY = (sy - this.viewH / 2) / this.zoom + this.cam.y;
       const g = toGrid(worldX, worldY);
+
+      // ¿Clic sobre la Sibila del Campamento?
+      if (this.dungeon?.npc && Math.hypot(this.dungeon.npc.x - g.x, this.dungeon.npc.y - g.y) < 1.1) {
+        if (Math.hypot(this.dungeon.npc.x - this.pos.x, this.dungeon.npc.y - this.pos.y) <= 2.2) {
+          this.interactNearby();
+        } else {
+          this.moveTarget = { x: this.dungeon.npc.x, y: this.dungeon.npc.y };
+        }
+        return;
+      }
 
       // ¿Clic sobre un drop cercano?
       const drop = this.groundDrops.find((d) => Math.hypot(d.x - g.x, d.y - g.y) < 0.85);
@@ -129,19 +159,21 @@ export class ArchGame {
     this.canvas.width = Math.floor(this.viewW * dpr);
     this.canvas.height = Math.floor(this.viewH * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.renderer3d?.resize(this.viewW, this.viewH);
   }
 
-  startNewGame({ classId = 'hoplita', seed = 'olimpia-01' } = {}) {
+  startNewGame({ classId = 'hoplita', heroName = '', seed = 'olimpia-01' } = {}) {
     this.seed = (seed || 'olimpia-01').trim();
     this.floor = 1;
-    this.hero = createHero(classId);
+    this.hero = createHero(classId, heroName);
     const derived = computeHeroDerived(this.hero);
     this.hero.hp = derived.maxHp;
     this.hero.mana = derived.maxMana;
     this.gameOver = false;
     this.log = [];
-    this.addLog(`Inicias descenso como ${this.hero.name} (semilla: ${this.seed}).`);
     this._loadFloor(1);
+    this.addLog(`Sibila de Cumas: «Bienvenido al Aqueronte, ${this.hero.className}. Purga el Antro [F]».`);
+    this.addLog(this.hero.prologue);
     if (!this.running) {
       this.running = true;
       this.lastTs = performance.now();
@@ -164,16 +196,17 @@ export class ArchGame {
     const iso = toIso(this.pos.x, this.pos.y);
     this.cam.x = iso.x;
     this.cam.y = iso.y;
-    this.addLog(`Piso ${floor}: ${this.dungeon.biome.name}.`);
+    this.renderer3d?.buildDungeon(this.dungeon);
+    this.addLog(`Acto I · Piso ${floor}: ${this.dungeon.biome.name}.`);
   }
 
   addLog(msg) {
     this.log.unshift(msg);
-    if (this.log.length > 6) this.log.length = 6;
+    if (this.log.length > 7) this.log.length = 7;
   }
 
   addFloater(x, y, text, color = '#f8fafc') {
-    this.floaters.push({ x, y, text, color, life: 0.9 });
+    this.floaters.push({ x, y, text, color, life: 0.95 });
   }
 
   allocateStat(statKey) {
@@ -184,6 +217,18 @@ export class ArchGame {
     const derived = computeHeroDerived(this.hero);
     this.hero.hp = Math.min(derived.maxHp, this.hero.hp + 5);
     this.hero.mana = Math.min(derived.maxMana, this.hero.mana + 4);
+    this._notify();
+  }
+
+  allocateSkill(treeIndex) {
+    if (!allocateSkillPoint(this.hero, treeIndex)) return;
+    const cls = HERO_CLASSES[this.hero.classId];
+    const branchName = cls.trees[treeIndex] || `Rama ${treeIndex + 1}`;
+    const derived = computeHeroDerived(this.hero);
+    this.hero.hp = Math.min(derived.maxHp, this.hero.hp + 6);
+    this.hero.mana = Math.min(derived.maxMana, this.hero.mana + 4);
+    this.addFloater(this.pos.x, this.pos.y, `+1 ${branchName}`, '#facc15');
+    this.addLog(`Talento aprendido: ${branchName} (Sinergia: +${derived.synergyBonusPct}%).`);
     this._notify();
   }
 
@@ -227,6 +272,27 @@ export class ArchGame {
     const tx = Math.floor(this.pos.x);
     const ty = Math.floor(this.pos.y);
 
+    // 1. ¿Hablar con la Sibila de Cumas / NPC del Campamento?
+    if (this.dungeon.npc) {
+      const dn = Math.hypot(this.dungeon.npc.x - this.pos.x, this.dungeon.npc.y - this.pos.y);
+      if (dn <= 2.2) {
+        this.dungeon.npc.talked = true;
+        const derived = computeHeroDerived(this.hero);
+        this.hero.hp = derived.maxHp;
+        this.hero.mana = derived.maxMana;
+        const pending = this.hero.quests.find((q) => !q.completed);
+        if (pending) {
+          this.addLog(`${this.dungeon.npc.name}: «${pending.desc} (${pending.progress}/${pending.targetCount})».`);
+        } else {
+          this.addLog(`${this.dungeon.npc.name}: «Has cumplido los 3 Oráculos del Estigia, héroe inmortal».`);
+        }
+        this.addFloater(this.dungeon.npc.x, this.dungeon.npc.y, 'Oráculo de la Sibila (Salud restaurada)', '#facc15');
+        this._notify();
+        return true;
+      }
+    }
+
+    // 2. ¿Bajar por las escaleras?
     if (this.dungeon.grid[ty]?.[tx] === TILE_STAIRS) {
       this.addLog(`Desciendes al piso ${this.floor + 1}...`);
       this._loadFloor(this.floor + 1);
@@ -234,6 +300,7 @@ export class ArchGame {
       return true;
     }
 
+    // 3. ¿Altar curativo de Asclepio?
     if (this.dungeon.shrine && !this.dungeon.shrine.used) {
       const ds = Math.hypot(this.dungeon.shrine.x + 0.5 - this.pos.x, this.dungeon.shrine.y + 0.5 - this.pos.y);
       if (ds <= 1.7) {
@@ -248,13 +315,20 @@ export class ArchGame {
       }
     }
 
+    // 4. ¿Cofre Antiguo? (Avanza Hazaña II: El Óbolo de Caronte)
     for (const c of this.dungeon.chests) {
-      if (!c.opened && Math.hypot(c.x - this.pos.x, c.y - this.pos.y) <= 1.6) {
+      if (!c.opened && Math.hypot(c.x - this.pos.x, c.y - this.pos.y) <= 1.7) {
         c.opened = true;
-        const item = generateItem({ level: this.floor, tier: 'champion', seed: `${this.seed}:chest:${this.floor}:${c.x}` });
+        const item = generateItem({
+          level: this.floor,
+          tier: 'champion',
+          preferredClass: this.hero.classId,
+          seed: `${this.seed}:chest:${this.floor}:${c.x}`,
+        });
         this.groundDrops.push({ x: c.x, y: c.y, kind: 'item', item });
         this.groundDrops.push({ x: c.x + 0.25, y: c.y, kind: 'gold', amount: 22 * this.floor });
-        this.addFloater(c.x, c.y, 'Cofre abierto', '#facc15');
+        this.addFloater(c.x, c.y, 'Cofre Antiguo abierto', '#facc15');
+        this._advanceQuest('obolo_caronte', 1, c.x, c.y);
         this._notify();
         return true;
       }
@@ -292,6 +366,7 @@ export class ArchGame {
     }
 
     this.attackCdLeft = derived.attackCd;
+    this.renderer3d?.triggerHeroAttack({ whirlwind: false });
     if (derived.range > 2.2) {
       const ang = Math.atan2(target.y - this.pos.y, target.x - this.pos.x);
       this.projectiles.push({
@@ -325,11 +400,47 @@ export class ArchGame {
     this.hero.mana -= skill.cost;
     if (slot === 'q') this.skillQCd = skill.cd;
     else this.skillECd = skill.cd;
+    this.renderer3d?.triggerHeroAttack({ whirlwind: this.hero.classId === 'campeon' && slot === 'q' });
 
-    const derived = computeHeroDerived(this.hero);
+    const rawDerived = computeHeroDerived(this.hero);
+    const pMult = rawDerived.skillPowerMult || 1;
+    const derived = {
+      ...rawDerived,
+      minDamage: Math.round(rawDerived.minDamage * pMult),
+      maxDamage: Math.round(rawDerived.maxDamage * pMult),
+    };
     const now = Date.now();
 
-    if (this.hero.classId === 'hoplita') {
+    if (this.hero.classId === 'campeon') {
+      if (slot === 'q') {
+        let hits = 0;
+        for (const e of this.enemies) {
+          if (e.hp <= 0) continue;
+          if (Math.hypot(e.x - this.pos.x, e.y - this.pos.y) <= 2.6) {
+            this._strikeEnemy(e, {
+              ...derived,
+              minDamage: derived.minDamage * 1.45,
+              maxDamage: derived.maxDamage * 1.65,
+              lifeOnHit: derived.lifeOnHit + 4,
+            });
+            hits++;
+          }
+        }
+        this.addFloater(this.pos.x, this.pos.y, hits ? '¡Torbellino Tracio!' : 'Torbellino', '#ef4444');
+      } else {
+        this.hero.buffs.furyUntil = now + 5500;
+        for (const e of this.enemies) {
+          if (e.hp <= 0) continue;
+          const d = Math.hypot(e.x - this.pos.x, e.y - this.pos.y);
+          if (d <= 3.0) {
+            const nx = e.x + ((e.x - this.pos.x) / Math.max(0.2, d)) * 1.1;
+            const ny = e.y + ((e.y - this.pos.y) / Math.max(0.2, d)) * 1.1;
+            if (isWalkable(this.dungeon, nx, ny)) { e.x = nx; e.y = ny; }
+          }
+        }
+        this.addFloater(this.pos.x, this.pos.y, '¡Grito de Fobos!', '#fb923c');
+      }
+    } else if (this.hero.classId === 'hoplita') {
       if (slot === 'q') {
         let hitCount = 0;
         for (const e of this.enemies) {
@@ -343,10 +454,17 @@ export class ArchGame {
             hitCount++;
           }
         }
-        this.addFloater(this.pos.x, this.pos.y, hitCount ? '¡Golpe de Égida!' : 'Égida al aire', '#f87171');
+        this.addFloater(this.pos.x, this.pos.y, hitCount ? '¡Golpe de Égida!' : 'Égida al aire', '#f59e0b');
       } else {
-        this.hero.buffs.furyUntil = now + 5000;
-        this.addFloater(this.pos.x, this.pos.y, '¡Furia de Ares!', '#fb923c');
+        this.hero.buffs.shieldUntil = now + 6000;
+        this.hero.buffs.furyUntil = now + 4500;
+        for (const e of this.enemies) {
+          if (e.hp <= 0) continue;
+          if (Math.hypot(e.x - this.pos.x, e.y - this.pos.y) <= 2.8) {
+            this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 0.9, maxDamage: derived.maxDamage * 1.1 });
+          }
+        }
+        this.addFloater(this.pos.x, this.pos.y, '☀ Aura de Apolo', '#facc15');
       }
     } else if (this.hero.classId === 'arquera') {
       if (slot === 'q') {
@@ -367,10 +485,122 @@ export class ArchGame {
         });
         this.addFloater(this.pos.x, this.pos.y, 'Flecha Lunar', '#4ade80');
       } else {
-        const heal = Math.round(derived.maxHp * 0.18);
+        const t = this._nearestEnemy(9) || { x: this.pos.x + 1, y: this.pos.y };
+        for (const offset of [-0.22, 0, 0.22]) {
+          const ang = Math.atan2(t.y - this.pos.y, t.x - this.pos.x) + offset;
+          this.projectiles.push({
+            fromHero: true,
+            pierce: true,
+            x: this.pos.x,
+            y: this.pos.y,
+            vx: Math.cos(ang) * 13,
+            vy: Math.sin(ang) * 13,
+            life: 0.75,
+            minDmg: derived.minDamage * 1.15,
+            maxDmg: derived.maxDamage * 1.35,
+            critChance: derived.critChance,
+            color: '#86efac',
+          });
+        }
+        const heal = Math.round(derived.maxHp * 0.14);
         this.hero.hp = Math.min(derived.maxHp, this.hero.hp + heal);
         this.hero.buffs.furyUntil = now + 3500;
-        this.addFloater(this.pos.x, this.pos.y, `Paso de Cierva +${heal}`, '#4ade80');
+        this.addFloater(this.pos.x, this.pos.y, `Salva de Ortigia +${heal}`, '#4ade80');
+      }
+    } else if (this.hero.classId === 'necromante') {
+      if (slot === 'q') {
+        const t = this._nearestEnemy(9) || { x: this.pos.x + 1, y: this.pos.y };
+        const ang = Math.atan2(t.y - this.pos.y, t.x - this.pos.x);
+        this.projectiles.push({
+          fromHero: true,
+          pierce: true,
+          x: this.pos.x,
+          y: this.pos.y,
+          vx: Math.cos(ang) * 12.5,
+          vy: Math.sin(ang) * 12.5,
+          life: 0.95,
+          minDmg: derived.minDamage * 1.55,
+          maxDmg: derived.maxDamage * 1.75,
+          critChance: derived.critChance + 0.12,
+          color: '#c084fc',
+        });
+        this.hero.hp = Math.min(derived.maxHp, this.hero.hp + 5);
+        this.addFloater(this.pos.x, this.pos.y, '💀 Lanza de Caronte', '#c084fc');
+      } else {
+        const target = this._nearestEnemy(8) || { x: this.pos.x, y: this.pos.y };
+        for (const e of this.enemies) {
+          if (e.hp <= 0) continue;
+          if (Math.hypot(e.x - target.x, e.y - target.y) <= 2.8) {
+            e.armor = Math.max(0, Math.round(e.armor * 0.6));
+            this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.45, maxDamage: derived.maxDamage * 1.65 });
+          }
+        }
+        const drain = Math.round(derived.maxHp * 0.16);
+        this.hero.hp = Math.min(derived.maxHp, this.hero.hp + drain);
+        this.addFloater(target.x, target.y, '☠ Condena de Átropos', '#a855f7');
+      }
+    } else if (this.hero.classId === 'sombra') {
+      if (slot === 'q') {
+        const target = this._nearestEnemy(5.5);
+        if (target) {
+          const ang = Math.atan2(target.y - this.pos.y, target.x - this.pos.x);
+          const nx = target.x - Math.cos(ang) * 0.85;
+          const ny = target.y - Math.sin(ang) * 0.85;
+          if (isWalkable(this.dungeon, nx, ny)) {
+            this.pos.x = nx;
+            this.pos.y = ny;
+            updateVisibility(this.dungeon, this.pos.x, this.pos.y, 8);
+          }
+          this._strikeEnemy(target, {
+            ...derived,
+            minDamage: derived.minDamage * 1.75,
+            maxDamage: derived.maxDamage * 2.0,
+            critChance: Math.min(0.95, derived.critChance + 0.35),
+          });
+          this.addFloater(target.x, target.y, '🗡 Filo de las Erinias', '#f472b6');
+        } else {
+          this.addFloater(this.pos.x, this.pos.y, 'Sin blanco cercano', '#94a3b8');
+        }
+      } else {
+        this.hero.buffs.furyUntil = now + 4500;
+        const targets = this.enemies.filter((e) => e.hp > 0 && Math.hypot(e.x - this.pos.x, e.y - this.pos.y) <= 6.5).slice(0, 4);
+        for (const t of targets) {
+          const ang = Math.atan2(t.y - this.pos.y, t.x - this.pos.x);
+          this.projectiles.push({
+            fromHero: true,
+            pierce: false,
+            x: this.pos.x,
+            y: this.pos.y,
+            vx: Math.cos(ang) * 13.5,
+            vy: Math.sin(ang) * 13.5,
+            life: 0.75,
+            minDmg: derived.minDamage * 1.35,
+            maxDmg: derived.maxDamage * 1.55,
+            critChance: derived.critChance + 0.15,
+            color: '#f472b6',
+          });
+        }
+        this.addFloater(this.pos.x, this.pos.y, '⚙ Centinela de Hefesto', '#ec4899');
+      }
+    } else if (this.hero.classId === 'coribante') {
+      if (slot === 'q') {
+        for (const e of this.enemies) {
+          if (e.hp <= 0) continue;
+          const d = Math.hypot(e.x - this.pos.x, e.y - this.pos.y);
+          if (d <= 2.9) {
+            this._strikeEnemy(e, { ...derived, minDamage: derived.minDamage * 1.5, maxDamage: derived.maxDamage * 1.7 });
+            const nx = e.x + ((e.x - this.pos.x) / Math.max(0.2, d)) * 0.8;
+            const ny = e.y + ((e.y - this.pos.y) / Math.max(0.2, d)) * 0.8;
+            if (isWalkable(this.dungeon, nx, ny)) { e.x = nx; e.y = ny; }
+          }
+        }
+        this.addFloater(this.pos.x, this.pos.y, '🌋 Cólera de Gea', '#84cc16');
+      } else {
+        const heal = Math.round(derived.maxHp * 0.24);
+        this.hero.hp = Math.min(derived.maxHp, this.hero.hp + heal);
+        this.hero.buffs.furyUntil = now + 5500;
+        this.hero.buffs.shieldUntil = now + 5500;
+        this.addFloater(this.pos.x, this.pos.y, `🐺 Forma de Licaón +${heal}`, '#a3e635');
       }
     } else {
       if (slot === 'q') {
@@ -413,6 +643,44 @@ export class ArchGame {
     }
   }
 
+  _advanceQuest(questId, amount = 1, gx = this.pos.x, gy = this.pos.y) {
+    const q = (this.hero.quests || []).find((item) => item.id === questId);
+    if (!q || q.completed) return;
+    q.progress = Math.min(q.targetCount, q.progress + amount);
+    if (q.progress < q.targetCount) return;
+
+    q.completed = true;
+    if (questId === 'antro_perjuros') {
+      this.hero.skillPoints += 1;
+      this.hero.statPoints += 1;
+      this.addFloater(gx, gy, '¡Hazaña I Cumplida! +1 Talento', '#facc15');
+      this.addLog('Hazaña cumplida: El Antro de los Perjuros (+1 Punto de Talento y +1 Atributo).');
+    } else if (questId === 'obolo_caronte') {
+      this.hero.gold += 80;
+      const classRare = generateItem({
+        level: this.floor + 1,
+        forceRarity: 'rare',
+        forceClassItem: true,
+        preferredClass: this.hero.classId,
+        seed: `${this.seed}:quest2:${this.hero.classId}`,
+      });
+      this.groundDrops.push({ x: gx + 0.3, y: gy + 0.3, kind: 'item', item: classRare });
+      this.addFloater(gx, gy, '¡Hazaña II Cumplida! Reliquia de Clase', '#facc15');
+      this.addLog(`Hazaña cumplida: El Óbolo de Caronte (+80 dracmas y ${classRare.name}).`);
+    } else if (questId === 'sombra_asterion') {
+      this.hero.skillPoints += 2;
+      const classUnique = generateItem({
+        level: this.floor + 1,
+        forceRarity: 'unique',
+        preferredClass: this.hero.classId,
+        seed: `${this.seed}:quest3:${this.hero.classId}`,
+      });
+      this.groundDrops.push({ x: gx, y: gy, kind: 'item', item: classUnique });
+      this.addFloater(gx, gy, '¡Hazaña III Cumplida! Reliquia Única', '#f97316');
+      this.addLog(`Hazaña cumplida: El Guardián del Umbral (+2 Talentos y ${classUnique.name}).`);
+    }
+  }
+
   _onEnemyKilled(enemy) {
     const levels = grantHeroXp(this.hero, enemy.xp);
     if (levels > 0) {
@@ -420,9 +688,19 @@ export class ArchGame {
       this.hero.hp = derived.maxHp;
       this.hero.mana = derived.maxMana;
       this.addFloater(this.pos.x, this.pos.y, `¡Nivel ${this.hero.level}!`, '#facc15');
-      this.addLog(`Subiste a nivel ${this.hero.level} (+3 puntos de atributo).`);
+      this.addLog(`Subiste a nivel ${this.hero.level} (+3 Atributos y +1 Punto de Talento).`);
     }
-    const drops = rollEnemyDrop({ level: this.floor, tier: enemy.tier, seed: `${this.seed}:${enemy.id}` });
+    this._advanceQuest('antro_perjuros', 1, enemy.x, enemy.y);
+    if (enemy.tier === 'boss') {
+      this._advanceQuest('sombra_asterion', 1, enemy.x, enemy.y);
+    }
+
+    const drops = rollEnemyDrop({
+      level: this.floor,
+      tier: enemy.tier,
+      preferredClass: this.hero.classId,
+      seed: `${this.seed}:${enemy.id}`,
+    });
     for (const d of drops) {
       this.groundDrops.push({
         x: enemy.x + (Math.random() - 0.5) * 0.5,
@@ -437,6 +715,7 @@ export class ArchGame {
     if (!this.running) return;
     const dt = Math.min(0.05, Math.max(0.001, (ts - this.lastTs) / 1000));
     this.lastTs = ts;
+    this.lastDt = dt;
     if (!this.gameOver) this._update(dt);
     this._render();
     requestAnimationFrame((nextTs) => this._loop(nextTs));
@@ -632,18 +911,27 @@ export class ArchGame {
 
   _render() {
     const ctx = this.ctx;
-    ctx.fillStyle = '#090b10';
-    ctx.fillRect(0, 0, this.viewW, this.viewH);
+    const is3D = Boolean(this.renderer3d?.enabled);
+
+    if (is3D) {
+      this.renderer3d.render(this, this.lastDt || 0.016);
+      ctx.clearRect(0, 0, this.viewW, this.viewH);
+    } else {
+      ctx.fillStyle = '#090b10';
+      ctx.fillRect(0, 0, this.viewW, this.viewH);
+    }
     if (!this.dungeon) return;
 
     ctx.save();
-    ctx.translate(this.viewW / 2 - this.cam.x, this.viewH / 2 - this.cam.y);
+    ctx.translate(this.viewW / 2, this.viewH / 2);
+    ctx.scale(this.zoom, this.zoom);
+    ctx.translate(-this.cam.x, -this.cam.y);
 
     const { width, height, grid, explored, biome } = this.dungeon;
     const hw = TILE_W / 2;
     const hh = TILE_H / 2;
 
-    // Pintar suelo y hitos visibles/explorados en orden isométrico
+    // Pintar suelo (solo en fallback 2D) y etiquetas de hitos visibles
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const vis = explored[y][x];
@@ -653,78 +941,109 @@ export class ArchGame {
         const alpha = vis === 2 ? 1 : 0.34;
         ctx.globalAlpha = alpha;
 
-        if (t === TILE_WALL) {
-          ctx.fillStyle = biome.wall;
-          ctx.beginPath();
-          ctx.moveTo(iso.x, iso.y - WALL_H);
-          ctx.lineTo(iso.x + hw, iso.y + hh - WALL_H);
-          ctx.lineTo(iso.x, iso.y + TILE_H - WALL_H);
-          ctx.lineTo(iso.x - hw, iso.y + hh - WALL_H);
-          ctx.closePath();
-          ctx.fill();
+        if (!is3D) {
+          if (t === TILE_WALL) {
+            ctx.fillStyle = biome.wall;
+            ctx.beginPath();
+            ctx.moveTo(iso.x, iso.y - WALL_H);
+            ctx.lineTo(iso.x + hw, iso.y + hh - WALL_H);
+            ctx.lineTo(iso.x, iso.y + TILE_H - WALL_H);
+            ctx.lineTo(iso.x - hw, iso.y + hh - WALL_H);
+            ctx.closePath();
+            ctx.fill();
 
-          ctx.fillStyle = '#111622';
-          ctx.beginPath();
-          ctx.moveTo(iso.x - hw, iso.y + hh - WALL_H);
-          ctx.lineTo(iso.x, iso.y + TILE_H - WALL_H);
-          ctx.lineTo(iso.x, iso.y + TILE_H);
-          ctx.lineTo(iso.x - hw, iso.y + hh);
-          ctx.closePath();
-          ctx.fill();
-        } else {
-          ctx.fillStyle = t === TILE_STAIRS ? '#3b2e16' : t === TILE_SHRINE ? '#172d3d' : biome.floor;
-          ctx.beginPath();
-          ctx.moveTo(iso.x, iso.y);
-          ctx.lineTo(iso.x + hw, iso.y + hh);
-          ctx.lineTo(iso.x, iso.y + TILE_H);
-          ctx.lineTo(iso.x - hw, iso.y + hh);
-          ctx.closePath();
-          ctx.fill();
-          ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-          ctx.stroke();
-
-          if (t === TILE_STAIRS) {
-            ctx.fillStyle = '#facc15';
-            ctx.font = 'bold 11px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText('▼ BAJAR [F]', iso.x, iso.y + hh + 4);
-          } else if (t === TILE_SHRINE) {
-            ctx.fillStyle = this.dungeon.shrine?.used ? '#64748b' : '#38bdf8';
-            ctx.font = 'bold 11px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText('✦ ALTAR [F]', iso.x, iso.y + hh + 4);
+            ctx.fillStyle = '#111622';
+            ctx.beginPath();
+            ctx.moveTo(iso.x - hw, iso.y + hh - WALL_H);
+            ctx.lineTo(iso.x, iso.y + TILE_H - WALL_H);
+            ctx.lineTo(iso.x, iso.y + TILE_H);
+            ctx.lineTo(iso.x - hw, iso.y + hh);
+            ctx.closePath();
+            ctx.fill();
+          } else {
+            ctx.fillStyle = t === TILE_STAIRS ? '#3b2e16' : t === TILE_SHRINE ? '#172d3d' : biome.floor;
+            ctx.beginPath();
+            ctx.moveTo(iso.x, iso.y);
+            ctx.lineTo(iso.x + hw, iso.y + hh);
+            ctx.lineTo(iso.x, iso.y + TILE_H);
+            ctx.lineTo(iso.x - hw, iso.y + hh);
+            ctx.closePath();
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+            ctx.stroke();
           }
+        }
+
+        if (t === TILE_STAIRS) {
+          ctx.fillStyle = '#facc15';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('▼ BAJAR [F]', iso.x, iso.y + hh - (is3D ? 18 : -4));
+        } else if (t === TILE_SHRINE) {
+          ctx.fillStyle = this.dungeon.shrine?.used ? '#64748b' : '#38bdf8';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('✦ ALTAR [F]', iso.x, iso.y + hh - (is3D ? 18 : -4));
         }
       }
     }
 
     ctx.globalAlpha = 1;
 
-    // Cofres
-    for (const c of this.dungeon.chests) {
-      if (explored[Math.floor(c.y)]?.[Math.floor(c.x)] !== 2) continue;
-      const iso = toIso(c.x, c.y);
-      ctx.fillStyle = c.opened ? '#475569' : '#d97706';
-      ctx.fillRect(iso.x - 8, iso.y - 6, 16, 11);
-      ctx.strokeStyle = '#fde68a';
-      ctx.strokeRect(iso.x - 8, iso.y - 6, 16, 11);
+    // NPC del Campamento (Sibila de Cumas)
+    if (this.dungeon.npc) {
+      const n = this.dungeon.npc;
+      if (explored[Math.floor(n.y)]?.[Math.floor(n.x)] === 2) {
+        const iso = toIso(n.x, n.y);
+        if (!is3D) {
+          ctx.fillStyle = '#fb923c';
+          ctx.beginPath();
+          ctx.arc(iso.x - 18, iso.y + 4, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#e879f9';
+          ctx.beginPath();
+          ctx.arc(iso.x, iso.y - 9, 8.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#fde68a';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#fde68a';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`✦ ${n.name.toUpperCase()} [F]`, iso.x, iso.y - (is3D ? 36 : 22));
+      }
     }
 
-    // Botín en el suelo
+    // Cofres (solo en fallback 2D; en 3D se renderizan con tapa articulada)
+    if (!is3D) {
+      for (const c of this.dungeon.chests) {
+        if (explored[Math.floor(c.y)]?.[Math.floor(c.x)] !== 2) continue;
+        const iso = toIso(c.x, c.y);
+        ctx.fillStyle = c.opened ? '#475569' : '#d97706';
+        ctx.fillRect(iso.x - 8, iso.y - 6, 16, 11);
+        ctx.strokeStyle = '#fde68a';
+        ctx.strokeRect(iso.x - 8, iso.y - 6, 16, 11);
+      }
+    }
+
+    // Botín en el suelo (etiquetas de objetos)
     for (const d of this.groundDrops) {
       const iso = toIso(d.x, d.y);
       const color = d.kind === 'gold' ? '#facc15' : d.kind === 'potion' ? '#ef4444' : d.item.color;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(iso.x, iso.y, 4.5, 0, Math.PI * 2);
-      ctx.fill();
+      if (!is3D) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(iso.x, iso.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
       if (d.kind === 'item') {
         ctx.fillStyle = 'rgba(9,11,16,0.82)';
-        ctx.fillRect(iso.x - 48, iso.y - 22, 96, 14);
+        ctx.fillRect(iso.x - 48, iso.y - 24, 96, 14);
         ctx.fillStyle = color;
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(d.item.name.slice(0, 18), iso.x, iso.y - 12);
+        ctx.fillText(d.item.name.slice(0, 18), iso.x, iso.y - 14);
       }
     }
 
@@ -738,43 +1057,50 @@ export class ArchGame {
 
     for (const a of actors) {
       if (a.kind === 'hero') {
-        const iso = toIso(this.pos.x, this.pos.y);
-        const clsColor = HERO_CLASSES[this.hero.classId].color;
-        ctx.fillStyle = 'rgba(0,0,0,0.45)';
-        ctx.beginPath();
-        ctx.ellipse(iso.x, iso.y + 4, 10, 5, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = clsColor;
-        ctx.beginPath();
-        ctx.arc(iso.x, iso.y - 9, 9, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#fde68a';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        if (!is3D) {
+          const iso = toIso(this.pos.x, this.pos.y);
+          const clsColor = HERO_CLASSES[this.hero.classId].color;
+          ctx.fillStyle = 'rgba(0,0,0,0.45)';
+          ctx.beginPath();
+          ctx.ellipse(iso.x, iso.y + 4, 10, 5, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = clsColor;
+          ctx.beginPath();
+          ctx.arc(iso.x, iso.y - 9, 9, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#fde68a';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
       } else {
         const e = a.e;
         const iso = toIso(e.x, e.y);
         const rad = e.tier === 'boss' ? 12 : 8;
-        ctx.fillStyle = e.color;
-        ctx.beginPath();
-        ctx.arc(iso.x, iso.y - rad, rad, 0, Math.PI * 2);
-        ctx.fill();
-        // Barra de vida
-        const bw = e.tier === 'boss' ? 38 : 24;
-        ctx.fillStyle = '#1e293b';
-        ctx.fillRect(iso.x - bw / 2, iso.y - rad * 2 - 9, bw, 4);
-        ctx.fillStyle = '#ef4444';
-        ctx.fillRect(iso.x - bw / 2, iso.y - rad * 2 - 9, bw * (e.hp / e.maxHp), 4);
+        if (!is3D) {
+          ctx.fillStyle = e.color;
+          ctx.beginPath();
+          ctx.arc(iso.x, iso.y - rad, rad, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // Barra de vida sobre la cabeza del modelo 3D/2D
+        const bw = e.tier === 'boss' ? 42 : 26;
+        const barY = is3D ? iso.y - (e.tier === 'boss' ? 46 : 32) : iso.y - rad * 2 - 9;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+        ctx.fillRect(iso.x - bw / 2 - 1, barY - 1, bw + 2, 6);
+        ctx.fillStyle = e.tier === 'boss' ? '#f97316' : '#ef4444';
+        ctx.fillRect(iso.x - bw / 2, barY, bw * (e.hp / e.maxHp), 4);
       }
     }
 
-    // Proyectiles
-    for (const p of this.projectiles) {
-      const iso = toIso(p.x, p.y);
-      ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(iso.x, iso.y - 6, 3.5, 0, Math.PI * 2);
-      ctx.fill();
+    // Proyectiles (fallback 2D)
+    if (!is3D) {
+      for (const p of this.projectiles) {
+        const iso = toIso(p.x, p.y);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(iso.x, iso.y - 6, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // Textos flotantes de combate
@@ -784,7 +1110,7 @@ export class ArchGame {
       ctx.fillStyle = f.color;
       ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(f.text, iso.x, iso.y - 24 - (0.9 - f.life) * 20);
+      ctx.fillText(f.text, iso.x, iso.y - 34 - (0.9 - f.life) * 20);
       ctx.globalAlpha = 1;
     }
 
@@ -794,15 +1120,17 @@ export class ArchGame {
   _notify() {
     if (!this.onUiUpdate) return;
     const derived = computeHeroDerived(this.hero);
+    const classDef = HERO_CLASSES[this.hero.classId];
     this.onUiUpdate({
       hero: this.hero,
       derived,
+      classDef,
       floor: this.floor,
       biome: this.dungeon?.biome?.name || '',
       seed: this.seed,
       log: this.log,
       gameOver: this.gameOver,
-      skills: HERO_CLASSES[this.hero.classId].skills,
+      skills: classDef.skills,
     });
   }
 }
