@@ -19,7 +19,7 @@ import {
   HERO_CLASSES,
   resolveStrike,
 } from '../core/combat.js';
-import { generateItem, rollEnemyDrop } from '../core/loot.js';
+import { generateItem, getItemPowerScore, getItemSalvageValue, rollEnemyDrop } from '../core/loot.js';
 import { ArchRenderer3D } from './models3d.js';
 
 const TILE_W = 56;
@@ -41,12 +41,18 @@ function toGrid(isoX, isoY) {
 }
 
 export class ArchGame {
-  constructor({ canvas, onUiUpdate }) {
+  constructor({ canvas, onUiUpdate, onHudTick = null, onEvent = null }) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.onUiUpdate = onUiUpdate;
+    this.onHudTick = onHudTick;
+    this.onEvent = onEvent;
 
     this.keys = new Set();
+    this.joystick = { x: 0, y: 0 };
+    this.attackHeld = false;
+    this.lastAimDir = { x: 1, y: 0 };
+    this._hudTickAcc = 0;
     this.projectiles = [];
     this.floaters = [];
     this.groundDrops = [];
@@ -78,9 +84,21 @@ export class ArchGame {
   }
 
   _bindEvents() {
-    window.addEventListener('resize', () => this._resize());
+    const scheduleResize = () => {
+      this._resize();
+      requestAnimationFrame(() => this._resize());
+    };
+    window.addEventListener('resize', scheduleResize);
+    window.addEventListener('orientationchange', () => setTimeout(scheduleResize, 120));
+    document.addEventListener('fullscreenchange', () => setTimeout(scheduleResize, 80));
+    window.visualViewport?.addEventListener('resize', scheduleResize);
+    if (typeof ResizeObserver !== 'undefined' && this.canvas.parentElement) {
+      this._resizeObserver = new ResizeObserver(() => this._resize());
+      this._resizeObserver.observe(this.canvas.parentElement);
+    }
+
     window.addEventListener('keydown', (e) => {
-      if (e.target && ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
       const k = e.key.toLowerCase();
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) {
         if (this.running) e.preventDefault();
@@ -91,24 +109,31 @@ export class ArchGame {
       else if (k === 'e') this.castSkill('e');
       else if (k === '1' || k === 'r') this.usePotion();
       else if (k === 'f' || k === 'g') this.interactNearby();
-      else if (k === ' ') this.basicAttackNearest();
+      else if (k === ' ') this.basicAttackNearest({ allowInteract: true });
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+      this.joystick.x = 0;
+      this.joystick.y = 0;
+      this.attackHeld = false;
+    });
+
+    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
     this.canvas.addEventListener(
       'wheel',
       (e) => {
         if (!this.running) return;
         e.preventDefault();
-        const delta = e.deltaY < 0 ? 0.12 : -0.12;
-        this.zoom = Math.max(0.8, Math.min(2.0, Number((this.zoom + delta).toFixed(2))));
-        this.renderer3d?.setZoom(this.zoom);
+        this.adjustZoom(e.deltaY < 0 ? 0.12 : -0.12);
       },
       { passive: false }
     );
 
-    this.canvas.addEventListener('mousedown', (e) => {
+    this.canvas.addEventListener('pointerdown', (e) => {
       if (!this.running || this.gameOver) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       const rect = this.canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -127,7 +152,7 @@ export class ArchGame {
       }
 
       // ¿Clic sobre un drop cercano?
-      const drop = this.groundDrops.find((d) => Math.hypot(d.x - g.x, d.y - g.y) < 0.85);
+      const drop = this.groundDrops.find((d) => Math.hypot(d.x - g.x, d.y - g.y) < 0.9);
       if (drop) {
         this.moveTarget = { x: drop.x, y: drop.y };
         this.attackTargetId = null;
@@ -135,7 +160,7 @@ export class ArchGame {
       }
 
       // ¿Clic sobre un enemigo vivo?
-      const target = this.enemies.find((en) => en.hp > 0 && Math.hypot(en.x - g.x, en.y - g.y) < 1.0);
+      const target = this.enemies.find((en) => en.hp > 0 && Math.hypot(en.x - g.x, en.y - g.y) < 1.15);
       if (target) {
         this.attackTargetId = target.id;
         this.moveTarget = { x: target.x, y: target.y };
@@ -154,12 +179,56 @@ export class ArchGame {
     if (!parent) return;
     const rect = parent.getBoundingClientRect();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    this.viewW = Math.max(320, Math.floor(rect.width));
-    this.viewH = Math.max(320, Math.floor(rect.height));
+    this.viewW = Math.max(200, Math.floor(rect.width));
+    this.viewH = Math.max(200, Math.floor(rect.height));
     this.canvas.width = Math.floor(this.viewW * dpr);
     this.canvas.height = Math.floor(this.viewH * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.renderer3d?.resize(this.viewW, this.viewH);
+  }
+
+  setZoom(nextZoom) {
+    this.zoom = Math.max(0.75, Math.min(2.1, Number(nextZoom.toFixed(2))));
+    this.renderer3d?.setZoom(this.zoom);
+    this._emitHudTick();
+  }
+
+  adjustZoom(delta) {
+    this.setZoom(this.zoom + delta);
+  }
+
+  setJoystick(x, y) {
+    const mag = Math.hypot(x, y);
+    if (mag > 1) {
+      this.joystick.x = x / mag;
+      this.joystick.y = y / mag;
+    } else {
+      this.joystick.x = x;
+      this.joystick.y = y;
+    }
+  }
+
+  setAttackHeld(held) {
+    this.attackHeld = Boolean(held);
+    if (this.attackHeld && this.running && !this.gameOver) {
+      this.basicAttackNearest({ allowInteract: false });
+    }
+  }
+
+  _hasManualMoveInput() {
+    if (
+      this.keys.has('w') ||
+      this.keys.has('s') ||
+      this.keys.has('a') ||
+      this.keys.has('d') ||
+      this.keys.has('arrowup') ||
+      this.keys.has('arrowdown') ||
+      this.keys.has('arrowleft') ||
+      this.keys.has('arrowright')
+    ) {
+      return true;
+    }
+    return Math.hypot(this.joystick.x, this.joystick.y) > 0.08;
   }
 
   startNewGame({ classId = 'hoplita', heroName = '', seed = 'olimpia-01' } = {}) {
@@ -170,6 +239,12 @@ export class ArchGame {
     this.hero.hp = derived.maxHp;
     this.hero.mana = derived.maxMana;
     this.gameOver = false;
+    this.attackCdLeft = 0;
+    this.skillQCd = 0;
+    this.skillECd = 0;
+    this.attackHeld = false;
+    this.joystick = { x: 0, y: 0 };
+    this.lastAimDir = { x: 1, y: 0 };
     this.log = [];
     this._loadFloor(1);
     this.addLog(`Sibila de Cumas: «Bienvenido al Aqueronte, ${this.hero.className}. Purga el Antro [F]».`);
@@ -202,11 +277,24 @@ export class ArchGame {
 
   addLog(msg) {
     this.log.unshift(msg);
-    if (this.log.length > 7) this.log.length = 7;
+    if (this.log.length > 10) this.log.length = 10;
   }
 
-  addFloater(x, y, text, color = '#f8fafc') {
-    this.floaters.push({ x, y, text, color, life: 0.95 });
+  addFloater(x, y, text, color = '#f8fafc', options = {}) {
+    const opts = typeof options === 'object' && options !== null ? options : {};
+    const str = String(text);
+    const isLoot = opts.kind === 'loot' || str.startsWith('+') || str.startsWith('Recog');
+    const duration = opts.duration || (isLoot ? 1.45 : 1.15);
+    this.floaters.push({
+      x,
+      y,
+      text: str,
+      color: color || '#f8fafc',
+      kind: opts.kind || (isLoot ? 'loot' : 'default'),
+      life: duration,
+      maxLife: duration,
+      createdAt: performance.now(),
+    });
   }
 
   allocateStat(statKey) {
@@ -247,11 +335,60 @@ export class ArchGame {
     this._notify();
   }
 
+  unequipItem(slot) {
+    const current = this.hero.equipment[slot];
+    if (!current) return false;
+    if (this.hero.inventory.length >= 16) {
+      this.addFloater(this.pos.x, this.pos.y, 'Mochila llena', '#f87171');
+      this.addLog('Tu mochila está llena (16/16). Ofrenda o suelta un ítem primero.');
+      return false;
+    }
+    this.hero.equipment[slot] = null;
+    this.hero.inventory.push(current);
+    const d = computeHeroDerived(this.hero);
+    this.hero.hp = Math.min(d.maxHp, this.hero.hp);
+    this.hero.mana = Math.min(d.maxMana, this.hero.mana);
+    this.addLog(`Guardado en mochila: ${current.name}.`);
+    this._notify();
+    return true;
+  }
+
+  salvageItem(itemId) {
+    const idx = this.hero.inventory.findIndex((i) => i.id === itemId);
+    if (idx < 0) return 0;
+    const [removed] = this.hero.inventory.splice(idx, 1);
+    const goldGain = getItemSalvageValue(removed);
+    this.hero.gold += goldGain;
+    this.addFloater(this.pos.x, this.pos.y, `+${goldGain} dracmas`, '#facc15');
+    this.addLog(`Ofrendaste ${removed.name} por ${goldGain} dracmas.`);
+    this._notify();
+    return goldGain;
+  }
+
+  sortInventory() {
+    const rank = { unique: 4, rare: 3, magic: 2, common: 1 };
+    this.hero.inventory.sort((a, b) => {
+      const rDiff = (rank[b.rarity] || 0) - (rank[a.rarity] || 0);
+      if (rDiff !== 0) return rDiff;
+      const pDiff = getItemPowerScore(b, this.hero.classId) - getItemPowerScore(a, this.hero.classId);
+      if (pDiff !== 0) return pDiff;
+      return (b.ilvl || 1) - (a.ilvl || 1);
+    });
+    this._notify();
+  }
+
   dropInventoryItem(itemId) {
     const idx = this.hero.inventory.findIndex((i) => i.id === itemId);
     if (idx < 0) return;
     const [removed] = this.hero.inventory.splice(idx, 1);
-    this.groundDrops.push({ x: this.pos.x, y: this.pos.y, kind: 'item', item: removed });
+    this.groundDrops.push({
+      x: this.pos.x,
+      y: this.pos.y,
+      kind: 'item',
+      item: removed,
+      dropCooldown: 2.5,
+    });
+    this.addLog(`Soltaste al suelo: ${removed.name}.`);
     this._notify();
   }
 
@@ -268,71 +405,108 @@ export class ArchGame {
     this._notify();
   }
 
-  interactNearby() {
-    const tx = Math.floor(this.pos.x);
-    const ty = Math.floor(this.pos.y);
+  /** Devuelve el objeto interactuable cercano de mayor prioridad para el botón contextual [F]. */
+  getNearbyInteractable() {
+    if (!this.dungeon) return null;
 
-    // 1. ¿Hablar con la Sibila de Cumas / NPC del Campamento?
-    if (this.dungeon.npc) {
-      const dn = Math.hypot(this.dungeon.npc.x - this.pos.x, this.dungeon.npc.y - this.pos.y);
-      if (dn <= 2.2) {
-        this.dungeon.npc.talked = true;
-        const derived = computeHeroDerived(this.hero);
-        this.hero.hp = derived.maxHp;
-        this.hero.mana = derived.maxMana;
-        const pending = this.hero.quests.find((q) => !q.completed);
-        if (pending) {
-          this.addLog(`${this.dungeon.npc.name}: «${pending.desc} (${pending.progress}/${pending.targetCount})».`);
-        } else {
-          this.addLog(`${this.dungeon.npc.name}: «Has cumplido los 3 Oráculos del Estigia, héroe inmortal».`);
-        }
-        this.addFloater(this.dungeon.npc.x, this.dungeon.npc.y, 'Oráculo de la Sibila (Salud restaurada)', '#facc15');
-        this._notify();
-        return true;
+    for (const c of this.dungeon.chests) {
+      if (!c.opened && Math.hypot(c.x - this.pos.x, c.y - this.pos.y) <= 1.7) {
+        return { kind: 'chest', label: 'Cofre', hint: 'Abrir Cofre Antiguo', target: c };
       }
     }
 
-    // 2. ¿Bajar por las escaleras?
-    if (this.dungeon.grid[ty]?.[tx] === TILE_STAIRS) {
-      this.addLog(`Desciendes al piso ${this.floor + 1}...`);
-      this._loadFloor(this.floor + 1);
+    if (this.dungeon.shrine && !this.dungeon.shrine.used) {
+      const ds = Math.hypot(this.dungeon.shrine.x + 0.5 - this.pos.x, this.dungeon.shrine.y + 0.5 - this.pos.y);
+      if (ds <= 1.7) {
+        return { kind: 'shrine', label: 'Altar', hint: 'Bendición de Asclepio', target: this.dungeon.shrine };
+      }
+    }
+
+    const tx = Math.floor(this.pos.x);
+    const ty = Math.floor(this.pos.y);
+    const onStairs = this.dungeon.grid[ty]?.[tx] === TILE_STAIRS;
+    const nearStairs =
+      this.dungeon.stairs &&
+      Math.hypot(this.dungeon.stairs.x + 0.5 - this.pos.x, this.dungeon.stairs.y + 0.5 - this.pos.y) <= 1.35;
+    if (onStairs || nearStairs) {
+      return { kind: 'stairs', label: `Piso ${this.floor + 1}`, hint: `Descender al Piso ${this.floor + 1}`, target: this.dungeon.stairs };
+    }
+
+    if (this.dungeon.npc) {
+      const dn = Math.hypot(this.dungeon.npc.x - this.pos.x, this.dungeon.npc.y - this.pos.y);
+      if (dn <= 2.2) {
+        return { kind: 'npc', label: 'Sibila', hint: 'Hablar con la Sibila', target: this.dungeon.npc };
+      }
+    }
+
+    return null;
+  }
+
+  interactNearby() {
+    const near = this.getNearbyInteractable();
+    if (!near) return false;
+
+    if (near.kind === 'chest') {
+      const c = near.target;
+      c.opened = true;
+      const item = generateItem({
+        level: this.floor,
+        tier: 'champion',
+        preferredClass: this.hero.classId,
+        seed: `${this.seed}:chest:${this.floor}:${c.x}`,
+      });
+      this.groundDrops.push({ x: c.x, y: c.y, kind: 'item', item });
+      this.groundDrops.push({ x: c.x + 0.25, y: c.y, kind: 'gold', amount: 22 * this.floor });
+      this.addFloater(c.x, c.y, 'Cofre Antiguo abierto', '#facc15');
+      this._advanceQuest('obolo_caronte', 1, c.x, c.y);
       this._notify();
       return true;
     }
 
-    // 3. ¿Altar curativo de Asclepio?
-    if (this.dungeon.shrine && !this.dungeon.shrine.used) {
-      const ds = Math.hypot(this.dungeon.shrine.x + 0.5 - this.pos.x, this.dungeon.shrine.y + 0.5 - this.pos.y);
-      if (ds <= 1.7) {
-        this.dungeon.shrine.used = true;
-        const derived = computeHeroDerived(this.hero);
-        this.hero.hp = derived.maxHp;
-        this.hero.mana = derived.maxMana;
-        this.addFloater(this.pos.x, this.pos.y, 'Bendición de Asclepio', '#38bdf8');
-        this.addLog('El altar restauró toda tu salud y fervor.');
-        this._notify();
-        return true;
-      }
+    if (near.kind === 'shrine') {
+      this.dungeon.shrine.used = true;
+      const derived = computeHeroDerived(this.hero);
+      this.hero.hp = derived.maxHp;
+      this.hero.mana = derived.maxMana;
+      this.addFloater(this.pos.x, this.pos.y, 'Bendición de Asclepio', '#38bdf8');
+      this.addLog('El altar restauró toda tu salud y fervor.');
+      this.onEvent?.({ type: 'shrine', title: 'Altar de Asclepio', message: 'Salud y fervor restaurados por completo.' });
+      this._notify();
+      return true;
     }
 
-    // 4. ¿Cofre Antiguo? (Avanza Hazaña II: El Óbolo de Caronte)
-    for (const c of this.dungeon.chests) {
-      if (!c.opened && Math.hypot(c.x - this.pos.x, c.y - this.pos.y) <= 1.7) {
-        c.opened = true;
-        const item = generateItem({
-          level: this.floor,
-          tier: 'champion',
-          preferredClass: this.hero.classId,
-          seed: `${this.seed}:chest:${this.floor}:${c.x}`,
-        });
-        this.groundDrops.push({ x: c.x, y: c.y, kind: 'item', item });
-        this.groundDrops.push({ x: c.x + 0.25, y: c.y, kind: 'gold', amount: 22 * this.floor });
-        this.addFloater(c.x, c.y, 'Cofre Antiguo abierto', '#facc15');
-        this._advanceQuest('obolo_caronte', 1, c.x, c.y);
-        this._notify();
-        return true;
-      }
+    if (near.kind === 'stairs') {
+      this.addLog(`Desciendes al piso ${this.floor + 1}...`);
+      this._loadFloor(this.floor + 1);
+      this.onEvent?.({
+        type: 'floor',
+        title: `Piso ${this.floor}`,
+        message: this.dungeon?.biome?.name || 'Nuevo descenso',
+      });
+      this._notify();
+      return true;
     }
+
+    if (near.kind === 'npc') {
+      this.dungeon.npc.talked = true;
+      const derived = computeHeroDerived(this.hero);
+      this.hero.hp = derived.maxHp;
+      this.hero.mana = derived.maxMana;
+      const pending = this.hero.quests.find((q) => !q.completed);
+      const quote = pending
+        ? `${pending.desc} (${pending.progress}/${pending.targetCount})`
+        : 'Has cumplido los 3 Oráculos del Estigia, héroe inmortal.';
+      this.addLog(`${this.dungeon.npc.name}: «${quote}».`);
+      this.addFloater(this.dungeon.npc.x, this.dungeon.npc.y, 'Oráculo de la Sibila (Salud restaurada)', '#facc15');
+      this.onEvent?.({
+        type: 'oracle',
+        title: this.dungeon.npc.name,
+        message: `${quote} (Salud y fervor restaurados)`,
+      });
+      this._notify();
+      return true;
+    }
+
     return false;
   }
 
@@ -350,25 +524,79 @@ export class ArchGame {
     return best;
   }
 
-  basicAttackNearest() {
+  _aimFallbackTarget() {
+    return {
+      x: this.pos.x + (this.lastAimDir?.x ?? 1),
+      y: this.pos.y + (this.lastAimDir?.y ?? 0),
+    };
+  }
+
+  basicAttackNearest({ allowInteract = true } = {}) {
     if (this.attackCdLeft > 0 || this.gameOver) return;
-    if (this.interactNearby()) return;
     const derived = computeHeroDerived(this.hero);
-    const target =
+    const inRangeTarget =
       (this.attackTargetId && this.enemies.find((e) => e.id === this.attackTargetId && e.hp > 0)) ||
       this._nearestEnemy(derived.range + 0.8);
-    if (!target) return;
 
-    const dist = Math.hypot(target.x - this.pos.x, target.y - this.pos.y);
-    if (dist > derived.range + 0.4) {
-      this.moveTarget = { x: target.x, y: target.y };
+    if (!inRangeTarget && allowInteract && this.interactNearby()) {
       return;
     }
 
+    const visibleChaseTarget =
+      !inRangeTarget && !this._hasManualMoveInput()
+        ? (() => {
+            const candidate = this._nearestEnemy(6.0);
+            if (!candidate) return null;
+            const vis = this.dungeon?.explored[Math.floor(candidate.y)]?.[Math.floor(candidate.x)] === 2;
+            return vis ? candidate : null;
+          })()
+        : null;
+
+    if (visibleChaseTarget) {
+      this.attackTargetId = visibleChaseTarget.id;
+      this.moveTarget = { x: visibleChaseTarget.x, y: visibleChaseTarget.y };
+      return;
+    }
+
+    const target = inRangeTarget;
+    if (target) {
+      const dist = Math.hypot(target.x - this.pos.x, target.y - this.pos.y);
+      if (dist > derived.range + 0.4) {
+        if (!this._hasManualMoveInput()) {
+          this.moveTarget = { x: target.x, y: target.y };
+          return;
+        }
+      } else {
+        const ang = Math.atan2(target.y - this.pos.y, target.x - this.pos.x);
+        this.lastAimDir = { x: Math.cos(ang), y: Math.sin(ang) };
+        this.attackCdLeft = derived.attackCd;
+        this.renderer3d?.triggerHeroAttack({ whirlwind: false });
+        if (derived.range > 2.2) {
+          this.projectiles.push({
+            fromHero: true,
+            x: this.pos.x,
+            y: this.pos.y,
+            vx: Math.cos(ang) * 11,
+            vy: Math.sin(ang) * 11,
+            life: 0.75,
+            minDmg: derived.minDamage,
+            maxDmg: derived.maxDamage,
+            critChance: derived.critChance,
+            color: HERO_CLASSES[this.hero.classId].color,
+          });
+        } else {
+          this._strikeEnemy(target, derived);
+        }
+        return;
+      }
+    }
+
+    // Respuesta inmediata al tocar Atacar (incluso en movimiento / sin blanco cercano)
     this.attackCdLeft = derived.attackCd;
     this.renderer3d?.triggerHeroAttack({ whirlwind: false });
     if (derived.range > 2.2) {
-      const ang = Math.atan2(target.y - this.pos.y, target.x - this.pos.x);
+      const aim = this._aimFallbackTarget();
+      const ang = Math.atan2(aim.y - this.pos.y, aim.x - this.pos.x);
       this.projectiles.push({
         fromHero: true,
         x: this.pos.x,
@@ -381,8 +609,6 @@ export class ArchGame {
         critChance: derived.critChance,
         color: HERO_CLASSES[this.hero.classId].color,
       });
-    } else {
-      this._strikeEnemy(target, derived);
     }
   }
 
@@ -468,7 +694,7 @@ export class ArchGame {
       }
     } else if (this.hero.classId === 'arquera') {
       if (slot === 'q') {
-        const t = this._nearestEnemy(9) || { x: this.pos.x + 1, y: this.pos.y };
+        const t = this._nearestEnemy(9) || this._aimFallbackTarget();
         const ang = Math.atan2(t.y - this.pos.y, t.x - this.pos.x);
         this.projectiles.push({
           fromHero: true,
@@ -485,7 +711,7 @@ export class ArchGame {
         });
         this.addFloater(this.pos.x, this.pos.y, 'Flecha Lunar', '#4ade80');
       } else {
-        const t = this._nearestEnemy(9) || { x: this.pos.x + 1, y: this.pos.y };
+        const t = this._nearestEnemy(9) || this._aimFallbackTarget();
         for (const offset of [-0.22, 0, 0.22]) {
           const ang = Math.atan2(t.y - this.pos.y, t.x - this.pos.x) + offset;
           this.projectiles.push({
@@ -509,7 +735,7 @@ export class ArchGame {
       }
     } else if (this.hero.classId === 'necromante') {
       if (slot === 'q') {
-        const t = this._nearestEnemy(9) || { x: this.pos.x + 1, y: this.pos.y };
+        const t = this._nearestEnemy(9) || this._aimFallbackTarget();
         const ang = Math.atan2(t.y - this.pos.y, t.x - this.pos.x);
         this.projectiles.push({
           fromHero: true,
@@ -655,6 +881,7 @@ export class ArchGame {
       this.hero.statPoints += 1;
       this.addFloater(gx, gy, '¡Hazaña I Cumplida! +1 Talento', '#facc15');
       this.addLog('Hazaña cumplida: El Antro de los Perjuros (+1 Punto de Talento y +1 Atributo).');
+      this.onEvent?.({ type: 'quest', title: 'Hazaña I Cumplida', message: '+1 Punto de Talento y +1 Atributo' });
     } else if (questId === 'obolo_caronte') {
       this.hero.gold += 80;
       const classRare = generateItem({
@@ -667,6 +894,7 @@ export class ArchGame {
       this.groundDrops.push({ x: gx + 0.3, y: gy + 0.3, kind: 'item', item: classRare });
       this.addFloater(gx, gy, '¡Hazaña II Cumplida! Reliquia de Clase', '#facc15');
       this.addLog(`Hazaña cumplida: El Óbolo de Caronte (+80 dracmas y ${classRare.name}).`);
+      this.onEvent?.({ type: 'quest', title: 'Hazaña II Cumplida', message: `+80 dracmas y ${classRare.name}` });
     } else if (questId === 'sombra_asterion') {
       this.hero.skillPoints += 2;
       const classUnique = generateItem({
@@ -678,6 +906,7 @@ export class ArchGame {
       this.groundDrops.push({ x: gx, y: gy, kind: 'item', item: classUnique });
       this.addFloater(gx, gy, '¡Hazaña III Cumplida! Reliquia Única', '#f97316');
       this.addLog(`Hazaña cumplida: El Guardián del Umbral (+2 Talentos y ${classUnique.name}).`);
+      this.onEvent?.({ type: 'quest', title: 'Hazaña III Cumplida', message: `+2 Talentos y ${classUnique.name}` });
     }
   }
 
@@ -689,6 +918,11 @@ export class ArchGame {
       this.hero.mana = derived.maxMana;
       this.addFloater(this.pos.x, this.pos.y, `¡Nivel ${this.hero.level}!`, '#facc15');
       this.addLog(`Subiste a nivel ${this.hero.level} (+3 Atributos y +1 Punto de Talento).`);
+      this.onEvent?.({
+        type: 'levelup',
+        title: `¡Nivel ${this.hero.level}!`,
+        message: '+3 Atributos y +1 Punto de Talento disponibles',
+      });
     }
     this._advanceQuest('antro_perjuros', 1, enemy.x, enemy.y);
     if (enemy.tier === 'boss') {
@@ -728,7 +962,11 @@ export class ArchGame {
     this.skillECd = Math.max(0, this.skillECd - dt);
     this.hero.mana = Math.min(derived.maxMana, this.hero.mana + dt * 2.2);
 
-    // Movimiento por teclado (dirección en pantalla -> grilla isométrica)
+    if (this.attackHeld && this.attackCdLeft <= 0) {
+      this.basicAttackNearest({ allowInteract: false });
+    }
+
+    // Movimiento por teclado + joystick analógico (dirección en pantalla -> grilla isométrica)
     let sx = 0;
     let sy = 0;
     if (this.keys.has('w') || this.keys.has('arrowup')) sy -= 1;
@@ -736,15 +974,34 @@ export class ArchGame {
     if (this.keys.has('a') || this.keys.has('arrowleft')) sx -= 1;
     if (this.keys.has('d') || this.keys.has('arrowright')) sx += 1;
 
+    const kMag = Math.hypot(sx, sy);
+    const jMag = Math.hypot(this.joystick.x, this.joystick.y);
+    let moveInX = 0;
+    let moveInY = 0;
+    let throttle = 0;
+    if (kMag > 0) {
+      moveInX = sx / kMag;
+      moveInY = sy / kMag;
+      throttle = 1;
+    } else if (jMag > 0.08) {
+      moveInX = this.joystick.x / jMag;
+      moveInY = this.joystick.y / jMag;
+      throttle = Math.min(1, Math.max(0.35, jMag));
+    }
+
     let vx = 0;
     let vy = 0;
-    if (sx !== 0 || sy !== 0) {
+    if (throttle > 0) {
       this.moveTarget = null;
-      vx = sx + sy * 2;
-      vy = sy * 2 - sx;
+      this.attackTargetId = null;
+      vx = moveInX + moveInY * 2;
+      vy = moveInY * 2 - moveInX;
       const len = Math.hypot(vx, vy) || 1;
-      vx = (vx / len) * derived.speed;
-      vy = (vy / len) * derived.speed;
+      const dirX = vx / len;
+      const dirY = vy / len;
+      this.lastAimDir = { x: dirX, y: dirY };
+      vx = dirX * derived.speed * throttle;
+      vy = dirY * derived.speed * throttle;
     } else if (this.moveTarget) {
       const dx = this.moveTarget.x - this.pos.x;
       const dy = this.moveTarget.y - this.pos.y;
@@ -755,14 +1012,17 @@ export class ArchGame {
           this.attackTargetId = null;
           this.moveTarget = null;
         } else if (Math.hypot(target.x - this.pos.x, target.y - this.pos.y) <= derived.range) {
-          this.basicAttackNearest();
+          this.basicAttackNearest({ allowInteract: false });
         } else {
           this.moveTarget = { x: target.x, y: target.y };
         }
       }
       if (this.moveTarget && d > 0.16) {
-        vx = (dx / d) * derived.speed;
-        vy = (dy / d) * derived.speed;
+        const dirX = dx / d;
+        const dirY = dy / d;
+        this.lastAimDir = { x: dirX, y: dirY };
+        vx = dirX * derived.speed;
+        vy = dirY * derived.speed;
       } else {
         this.moveTarget = null;
       }
@@ -779,21 +1039,34 @@ export class ArchGame {
     // Recoger botín cercano automáticamente (oro/pociones) o ítems si hay espacio
     for (let i = this.groundDrops.length - 1; i >= 0; i--) {
       const d = this.groundDrops[i];
+      if (d.dropCooldown > 0) {
+        d.dropCooldown = Math.max(0, d.dropCooldown - dt);
+        continue;
+      }
       if (Math.hypot(d.x - this.pos.x, d.y - this.pos.y) > 0.75) continue;
       if (d.kind === 'gold') {
         this.hero.gold += d.amount;
-        this.addFloater(d.x, d.y, `+${d.amount} dracmas`, '#facc15');
+        this.addFloater(d.x, d.y, `+${d.amount} dracmas`, '#facc15', { kind: 'loot' });
         this.groundDrops.splice(i, 1);
         this._notify();
       } else if (d.kind === 'potion') {
         this.hero.potions += d.amount;
-        this.addFloater(d.x, d.y, '+1 Ambrosía', '#f87171');
+        this.addFloater(d.x, d.y, '+1 Ambrosía', '#f87171', { kind: 'loot' });
         this.groundDrops.splice(i, 1);
         this._notify();
       } else if (d.kind === 'item' && this.hero.inventory.length < 16) {
         this.hero.inventory.push(d.item);
         this.addLog(`Recogiste: ${d.item.name}`);
-        this.addFloater(d.x, d.y, d.item.name, d.item.color);
+        this.addFloater(d.x, d.y, d.item.name, d.item.color, { kind: 'loot' });
+        if (d.item.rarity === 'rare' || d.item.rarity === 'unique') {
+          this.onEvent?.({
+            type: 'loot',
+            title: d.item.rarityLabel,
+            message: d.item.name,
+            color: d.item.color,
+            item: d.item,
+          });
+        }
         this.groundDrops.splice(i, 1);
         this._notify();
       }
@@ -838,6 +1111,7 @@ export class ArchGame {
           this.addFloater(this.pos.x, this.pos.y, `-${hit.damage}`, '#ef4444');
           if (this.hero.hp <= 0) {
             this.gameOver = true;
+            this.attackHeld = false;
             this.addLog('Has caído en el laberinto. Reinicia para un nuevo descenso.');
           }
           this._notify();
@@ -889,6 +1163,7 @@ export class ArchGame {
             this.addFloater(this.pos.x, this.pos.y, `-${hit.damage}`, '#ef4444');
             if (this.hero.hp <= 0) {
               this.gameOver = true;
+              this.attackHeld = false;
               this.addLog('Has caído en el laberinto. Reinicia para un nuevo descenso.');
             }
             this._notify();
@@ -907,6 +1182,12 @@ export class ArchGame {
     const targetIso = toIso(this.pos.x, this.pos.y);
     this.cam.x += (targetIso.x - this.cam.x) * Math.min(1, dt * 8);
     this.cam.y += (targetIso.y - this.cam.y) * Math.min(1, dt * 8);
+
+    this._hudTickAcc += dt;
+    if (this._hudTickAcc >= 0.066) {
+      this._hudTickAcc = 0;
+      this._emitHudTick(derived);
+    }
   }
 
   _render() {
@@ -990,6 +1271,27 @@ export class ArchGame {
 
     ctx.globalAlpha = 1;
 
+    // Indicador de destino / blanco fijado
+    if (this.moveTarget && !this.attackTargetId) {
+      const mIso = toIso(this.moveTarget.x, this.moveTarget.y);
+      ctx.strokeStyle = 'rgba(229, 184, 105, 0.75)';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.ellipse(mIso.x, mIso.y, 10, 5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (this.attackTargetId) {
+      const target = this.enemies.find((e) => e.id === this.attackTargetId && e.hp > 0);
+      if (target && explored[Math.floor(target.y)]?.[Math.floor(target.x)] === 2) {
+        const tIso = toIso(target.x, target.y);
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.88)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(tIso.x, tIso.y + 3, 14, 7, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
     // NPC del Campamento (Sibila de Cumas)
     if (this.dungeon.npc) {
       const n = this.dungeon.npc;
@@ -1027,7 +1329,8 @@ export class ArchGame {
       }
     }
 
-    // Botín en el suelo (etiquetas de objetos)
+    // Botín en el suelo (etiquetas de objetos con anti-colisión)
+    const groundLabels = [];
     for (const d of this.groundDrops) {
       const iso = toIso(d.x, d.y);
       const color = d.kind === 'gold' ? '#facc15' : d.kind === 'potion' ? '#ef4444' : d.item.color;
@@ -1038,13 +1341,40 @@ export class ArchGame {
         ctx.fill();
       }
       if (d.kind === 'item') {
-        ctx.fillStyle = 'rgba(9,11,16,0.82)';
-        ctx.fillRect(iso.x - 48, iso.y - 24, 96, 14);
-        ctx.fillStyle = color;
-        ctx.font = '10px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(d.item.name.slice(0, 18), iso.x, iso.y - 14);
+        const text = d.item.name.slice(0, 20);
+        groundLabels.push({
+          x: iso.x,
+          renderY: iso.y - 24,
+          text,
+          color,
+          width: 96,
+          height: 15,
+        });
       }
+    }
+
+    // Resolver colisión entre etiquetas adyacentes en el suelo
+    for (let i = 0; i < groundLabels.length; i++) {
+      for (let j = 0; j < i; j++) {
+        const a = groundLabels[i];
+        const b = groundLabels[j];
+        if (Math.abs(a.x - b.x) < 80 && Math.abs(a.renderY - b.renderY) < 16) {
+          a.renderY = b.renderY - 17;
+        }
+      }
+    }
+
+    for (const lbl of groundLabels) {
+      ctx.fillStyle = 'rgba(9, 11, 16, 0.88)';
+      ctx.fillRect(lbl.x - lbl.width / 2, lbl.renderY - lbl.height / 2, lbl.width, lbl.height);
+      ctx.strokeStyle = lbl.color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(lbl.x - lbl.width / 2, lbl.renderY - lbl.height / 2, lbl.width, lbl.height);
+      ctx.fillStyle = lbl.color;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(lbl.text, lbl.x, lbl.renderY);
     }
 
     // Entidades ordenadas por profundidad (gx + gy)
@@ -1103,24 +1433,113 @@ export class ArchGame {
       }
     }
 
-    // Textos flotantes de combate
-    for (const f of this.floaters) {
-      const iso = toIso(f.x, f.y);
-      ctx.globalAlpha = Math.min(1, f.life * 1.4);
-      ctx.fillStyle = f.color;
-      ctx.font = 'bold 12px sans-serif';
+    // Textos flotantes (combate, botín, curación) con resolución anti-superposición
+    if (this.floaters.length > 0) {
+      ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(f.text, iso.x, iso.y - 34 - (0.9 - f.life) * 20);
+      ctx.textBaseline = 'middle';
+
+      // 1. Calcular dimensiones y posición base de cada floater
+      const floaterItems = this.floaters.map((f) => {
+        const iso = toIso(f.x, f.y);
+        const maxL = f.maxLife || 1.15;
+        const progress = Math.max(0, Math.min(1, 1 - (f.life / maxL)));
+        const rise = progress * 28;
+        const textWidth = ctx.measureText(f.text).width;
+        const width = Math.max(50, Math.round(textWidth + 16));
+        const height = 19;
+        return {
+          floater: f,
+          x: iso.x,
+          baseY: iso.y - 34 - rise,
+          renderY: iso.y - 34 - rise,
+          width,
+          height,
+          createdAt: f.createdAt || 0,
+          life: f.life,
+        };
+      });
+
+      // 2. Resolver colisiones: ordenar por orden de creación para formar una cascada
+      // El primero creado mantiene su base y los nuevos se apilan limpiamente hacia arriba con separación garantizada
+      floaterItems.sort((a, b) => (a.createdAt - b.createdAt) || (b.baseY - a.baseY));
+
+      for (let i = 0; i < floaterItems.length; i++) {
+        const item = floaterItems[i];
+        for (let j = 0; j < i; j++) {
+          const other = floaterItems[j];
+          // Solapamiento horizontal (si la distancia entre centros X es menor al ancho promedio + margen)
+          const horizOverlap = Math.abs(item.x - other.x) < ((item.width + other.width) / 2 + 6);
+          if (horizOverlap) {
+            const vertOverlap = Math.abs(item.renderY - other.renderY) < 20;
+            if (vertOverlap) {
+              item.renderY = other.renderY - 21;
+            }
+          }
+        }
+      }
+
+      // 3. Dibujar cada floater con badge protector
+      for (const item of floaterItems) {
+        const f = item.floater;
+        const alpha = Math.max(0, Math.min(1, f.life * 2.2));
+        ctx.globalAlpha = alpha;
+
+        const bx = item.x - item.width / 2;
+        const by = item.renderY - item.height / 2;
+
+        // Fondo oscuro estilizado con borde coloreado según rareza/tipo
+        ctx.fillStyle = 'rgba(9, 12, 18, 0.90)';
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(bx, by, item.width, item.height, 4);
+        } else {
+          ctx.rect(bx, by, item.width, item.height);
+        }
+        ctx.fill();
+
+        ctx.strokeStyle = f.color;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = alpha * 0.75;
+        ctx.stroke();
+
+        // Texto nítido
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = f.color;
+        ctx.fillText(f.text, item.x, item.renderY);
+      }
       ctx.globalAlpha = 1;
     }
 
     ctx.restore();
   }
 
+  _emitHudTick(precomputedDerived = null) {
+    if (!this.onHudTick) return;
+    const derived = precomputedDerived || computeHeroDerived(this.hero);
+    const classDef = HERO_CLASSES[this.hero.classId];
+    const now = Date.now();
+    this.onHudTick({
+      hero: this.hero,
+      derived,
+      classDef,
+      skills: classDef.skills,
+      attackCdLeft: this.attackCdLeft,
+      skillQCd: this.skillQCd,
+      skillECd: this.skillECd,
+      furyLeftSec: Math.max(0, ((this.hero.buffs?.furyUntil || 0) - now) / 1000),
+      shieldLeftSec: Math.max(0, ((this.hero.buffs?.shieldUntil || 0) - now) / 1000),
+      nearby: this.getNearbyInteractable(),
+      zoom: this.zoom,
+      gameOver: this.gameOver,
+    });
+  }
+
   _notify() {
-    if (!this.onUiUpdate) return;
     const derived = computeHeroDerived(this.hero);
     const classDef = HERO_CLASSES[this.hero.classId];
+    this._emitHudTick(derived);
+    if (!this.onUiUpdate) return;
     this.onUiUpdate({
       hero: this.hero,
       derived,
@@ -1131,6 +1550,7 @@ export class ArchGame {
       log: this.log,
       gameOver: this.gameOver,
       skills: classDef.skills,
+      nearby: this.getNearbyInteractable(),
     });
   }
 }

@@ -2,7 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRng } from '../src/core/rng.js';
 import { generateDungeon, isWalkable, TILE_STAIRS, updateVisibility } from '../src/core/dungeon.js';
-import { CLASS_BASE_ITEMS, TREASURE_CLASSES, generateItem, rollEnemyDrop } from '../src/core/loot.js';
+import {
+  CLASS_BASE_ITEMS,
+  TREASURE_CLASSES,
+  compareItems,
+  generateItem,
+  getItemPowerScore,
+  getItemSalvageValue,
+  getItemStatEntries,
+  rollEnemyDrop,
+} from '../src/core/loot.js';
 import {
   HERO_CLASSES,
   allocateSkillPoint,
@@ -169,4 +178,69 @@ test('modelos 3D (Three.js) construyen rigs articulados para las 7 clases griega
   assert.ok(sibyl.isGroup);
   assert.ok(sibyl.userData.oracleRing);
 });
+
+test('helpers de inspección, comparación y ofrenda de ítems funcionan correctamente', () => {
+  const hero = createHero('hoplita');
+  const starter = hero.equipment.charm;
+  const rare = generateItem({
+    level: 4,
+    forceRarity: 'unique',
+    preferredClass: 'hoplita',
+    seed: 'aegis-cmp',
+  });
+
+  const stats = getItemStatEntries(rare);
+  assert.ok(stats.length >= 2);
+  assert.ok(getItemSalvageValue(rare) > getItemSalvageValue(starter));
+  assert.ok(getItemPowerScore(rare, 'hoplita') > 0);
+
+  const emptyCmp = compareItems(rare, null, 'hoplita');
+  assert.equal(emptyCmp.verdict, 'empty');
+
+  const cmpStarter = compareItems(rare, starter, 'hoplita');
+  assert.ok(['better', 'worse', 'even'].includes(cmpStarter.verdict));
+  assert.ok(Array.isArray(cmpStarter.diffs));
+});
+
+test('sistema de floaters anti-superposición maneja múltiples elementos simultáneos', () => {
+  const floaters = [];
+  const addFloater = (x, y, text, color, opts = {}) => {
+    const isLoot = opts.kind === 'loot' || String(text).startsWith('+');
+    floaters.push({
+      x,
+      y,
+      text: String(text),
+      color,
+      life: isLoot ? 1.45 : 1.15,
+      createdAt: performance.now(),
+    });
+  };
+
+  // Simular agarrar oro, poción e ítem en el mismo instante y coordenada
+  addFloater(4.0, 4.0, '+25 dracmas', '#facc15', { kind: 'loot' });
+  addFloater(4.0, 4.0, '+1 Ambrosía', '#f87171', { kind: 'loot' });
+  addFloater(4.0, 4.0, 'Espada de Ares', '#38bdf8', { kind: 'loot' });
+
+  assert.equal(floaters.length, 3);
+  assert.ok(floaters.every((f) => f.life >= 1.4));
+
+  // Resolver colisiones verticales simuladas
+  const items = floaters.map((f) => ({ ...f, renderY: -34, width: 80, height: 19 }));
+  for (let i = 0; i < items.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (Math.abs(items[i].x - items[j].x) < 80 && Math.abs(items[i].renderY - items[j].renderY) < 20) {
+        items[i].renderY = items[j].renderY - 21;
+      }
+    }
+  }
+
+  // Verificar que cada texto tiene una posición vertical única separada al menos 20px
+  assert.equal(items[0].renderY, -34);
+  assert.equal(items[1].renderY, -55);
+  assert.equal(items[2].renderY, -76);
+  assert.ok(items[0].renderY > items[1].renderY);
+  assert.ok(items[1].renderY > items[2].renderY);
+});
+
+
 

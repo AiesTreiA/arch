@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" data-touch-controls="off">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>ARCH — Mitos Griegos ARPG (3D)</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23090b10'/%3E%3Cpath d='M32 10 48 52H38l-6-16-6 16H16Z' fill='%23e5b869'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="./styles.css" />
   <script type="importmap">
     {
@@ -14,291 +15,318 @@
   </script>
 </head>
 <body>
-  <header>
-    <div>
-      <span class="brand">⚔ ARCH 3D</span>
-      <span id="floorLabel" class="controls-hint">Acto I · Piso 1</span>
-    </div>
-    <div class="controls-hint">WASD / Clic: mover y atacar · Espacio: golpear · Q / E: habilidades · 1: poción · F: Sibila / altar / cofre · Rueda: zoom 3D</div>
-    <div>
-      <button id="btnNewRun" class="primary">Hoguera (Nuevo Héroe)</button>
-    </div>
-  </header>
-
-  <main>
+  <main id="appShell" class="app-shell">
     <div class="stage">
-      <canvas id="gameCanvas"></canvas>
-      <div id="startModal" class="modal">
-        <div class="modal-box">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
-            <h2 style="margin:0;color:var(--gold)">🔥 La Hoguera del Aqueronte — Selección de Héroe 3D</h2>
-            <span style="font-size:11px;color:var(--muted)">Acto I: El Umbral del Estigia</span>
+      <canvas id="gameCanvas" aria-label="Escenario 3D de ARCH"></canvas>
+
+      <!-- HUD Superior Flotante -->
+      <div id="hudTop" class="hud-top">
+        <section class="hud-hero-card" aria-label="Estado del héroe">
+          <div class="hud-hero-head">
+            <span id="heroCrest" class="hero-crest" aria-hidden="true"></span>
+            <div class="hud-hero-meta">
+              <div class="hud-hero-title-row">
+                <strong id="heroTitle" class="hero-name">Héroe</strong>
+                <span id="heroLevelBadge" class="lvl-pill">Nv.1</span>
+              </div>
+              <div class="hud-sub-row">
+                <span id="floorLabel" class="floor-label">Piso 1</span>
+                <span class="gold-pill" title="Dracmas">🪙 <strong id="goldText">0</strong></span>
+              </div>
+            </div>
           </div>
-          <p style="margin:4px 0 10px;color:var(--muted);font-size:12px">
-            Siete juramentos convergen frente a la barca de Caronte. Elige tu arquetipo griego en 3D (1:1 <em>Diablo II</em>), recibe tu reliquia de iniciado y habla con la <strong>Sibila de Cumas [F]</strong>.
-          </p>
 
-          <div class="class-grid" id="classGrid"></div>
-
-          <div class="card" style="margin:10px 0;background:#090c14;border-color:#3b3020;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-            <canvas id="heroPreviewCanvas" width="136" height="136" style="width:136px;height:136px;border-radius:8px;background:radial-gradient(circle at 50% 65%, #1e1810 0%, #07090e 85%);border:1px solid #3b3020;flex-shrink:0"></canvas>
-            <div id="classPreviewBox" style="flex:1;min-width:220px"></div>
+          <div class="hud-bars">
+            <div class="hud-bar-row">
+              <div class="bar bar-hp" title="Salud"><div id="hpBar"></div><span id="hpText" class="bar-val">100/100</span></div>
+            </div>
+            <div class="hud-bar-row">
+              <div class="bar bar-mana" title="Fervor"><div id="manaBar"></div><span id="manaText" class="bar-val">60/60</span></div>
+            </div>
+            <div class="hud-bar-row">
+              <div class="bar bar-xp" title="Experiencia"><div id="xpBar"></div><span id="xpText" class="bar-val">0/100</span></div>
+            </div>
           </div>
 
-          <div class="stat-row" style="margin-top:10px;flex-wrap:wrap">
-            <label for="heroNameInput" style="font-size:12px;color:var(--muted)">Nombre:</label>
-            <input id="heroNameInput" placeholder="Ej. Neoptólemo, Atalanta, Casandra..." style="flex:1;min-width:150px;background:#090b10;color:#fff;border:1px solid var(--border);padding:6px 8px;border-radius:6px" />
-            <label for="seedInput" style="font-size:12px;color:var(--muted)">Semilla:</label>
-            <input id="seedInput" value="olimpia-01" style="width:110px;background:#090b10;color:#fff;border:1px solid var(--border);padding:6px 8px;border-radius:6px" />
-            <button id="btnStart" class="primary" style="padding:6px 14px">Iniciar Acto I</button>
+          <div id="hudBuffs" class="hud-buffs" aria-live="off"></div>
+        </section>
+
+        <div class="hud-actions" role="toolbar" aria-label="Menú rápido y vista">
+          <button id="btnOpenItems" type="button" class="hud-btn" title="Equipo y Mochila [I]">
+            <span id="iconBag" class="hud-btn-icon"></span>
+            <span class="hud-btn-label">Ítems</span>
+            <span id="bagBadge" class="hud-badge">0/16</span>
+          </button>
+
+          <button id="btnOpenHero" type="button" class="hud-btn" title="Héroe y Talentos [C]">
+            <span id="iconHero" class="hud-btn-icon"></span>
+            <span class="hud-btn-label">Héroe</span>
+            <span id="heroPtsBadge" class="hud-badge is-alert" hidden>+1</span>
+          </button>
+
+          <button id="btnOpenQuests" type="button" class="hud-btn" title="Oráculos y Crónica [K]">
+            <span id="iconQuests" class="hud-btn-icon"></span>
+            <span class="hud-btn-label">Oráculos</span>
+            <span id="questsBadge" class="hud-badge">0/3</span>
+          </button>
+
+          <div class="hud-btn-group" role="group" aria-label="Zoom 3D">
+            <button id="btnZoomOut" type="button" class="hud-btn hud-icon-only" aria-label="Alejar cámara" title="Alejar zoom">
+              <span id="iconZoomOut" class="hud-btn-icon"></span>
+            </button>
+            <button id="btnZoomIn" type="button" class="hud-btn hud-icon-only" aria-label="Acercar cámara" title="Acercar zoom">
+              <span id="iconZoomIn" class="hud-btn-icon"></span>
+            </button>
+          </div>
+
+          <button id="btnToggleTouch" type="button" class="hud-btn" aria-pressed="false" aria-label="Cambiar modo de controles" title="Controles en pantalla">
+            <span id="iconTouch" class="hud-btn-icon"></span>
+            <span class="hud-btn-tag">Auto</span>
+          </button>
+
+          <button id="btnFullscreen" type="button" class="hud-btn hud-btn-fs" aria-pressed="false" title="Pantalla completa">
+            <span id="iconFullscreen" class="hud-btn-icon"></span>
+            <span class="hud-btn-label">Pantalla completa</span>
+          </button>
+
+          <button id="btnNewRun" type="button" class="hud-btn hud-btn-bonfire" title="Hoguera (Nuevo Héroe)">
+            <span id="iconBonfire" class="hud-btn-icon"></span>
+            <span class="hud-btn-label">Hoguera</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Aviso sutil en teléfono vertical -->
+      <div id="portraitHint" class="portrait-hint" role="note">
+        <span>📱 Gira el teléfono en horizontal + ⛶ para controles tipo Mobile Legends</span>
+        <button id="btnDismissRotateHint" type="button" class="btn-mini" aria-label="Ocultar aviso">×</button>
+      </div>
+
+      <!-- Banner flotante no bloqueante (Oráculos / Botín / Nivel) -->
+      <div id="hudToast" class="hud-toast" role="status" aria-live="polite"></div>
+
+      <!-- Controles Táctiles Estilo Mobile Legends (Izquierda mover · Derecha atacar/hechizos) -->
+      <div id="touchControls" class="touch-controls" aria-label="Controles táctiles en pantalla">
+        <div id="joystickPad" class="joystick-pad" aria-label="Joystick de movimiento">
+          <div id="joystickBase" class="joystick-base">
+            <span class="joy-tick joy-n" aria-hidden="true"></span>
+            <span class="joy-tick joy-s" aria-hidden="true"></span>
+            <span class="joy-tick joy-w" aria-hidden="true"></span>
+            <span class="joy-tick joy-e" aria-hidden="true"></span>
+            <span class="joy-hint" aria-hidden="true">MOVER</span>
+            <div id="joystickKnob" class="joystick-knob"></div>
           </div>
         </div>
+
+        <div class="ml-combat-arc" aria-label="Ataque, hechizos y pociones">
+          <button id="btnTouchPotion" type="button" class="ml-btn ml-potion" aria-label="Usar Ambrosía">
+            <span class="skill-icon"></span>
+            <span class="pot-count badge-corner">3</span>
+          </button>
+
+          <button id="btnTouchSkillQ" type="button" class="ml-btn ml-skill-q" aria-label="Habilidad Q">
+            <span class="cd-ring" aria-hidden="true"></span>
+            <span class="skill-icon"></span>
+            <span class="key-tag">Q</span>
+            <span class="skill-cost badge-corner">14</span>
+            <span class="skill-cd-text" aria-hidden="true"></span>
+            <span class="skill-short-name"></span>
+          </button>
+
+          <button id="btnTouchSkillE" type="button" class="ml-btn ml-skill-e" aria-label="Habilidad E">
+            <span class="cd-ring" aria-hidden="true"></span>
+            <span class="skill-icon"></span>
+            <span class="key-tag">E</span>
+            <span class="skill-cost badge-corner">16</span>
+            <span class="skill-cd-text" aria-hidden="true"></span>
+            <span class="skill-short-name"></span>
+          </button>
+
+          <button id="btnTouchInteract" type="button" class="ml-btn ml-interact" aria-label="Interactuar">
+            <span class="skill-icon"></span>
+            <span class="interact-label">Explorar</span>
+          </button>
+
+          <button id="btnTouchAttack" type="button" class="ml-btn ml-attack" aria-label="Atacar">
+            <span class="cd-ring" aria-hidden="true"></span>
+            <span class="skill-icon"></span>
+            <span class="atk-label">Atacar</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Barra de Acción Inferior para Escritorio -->
+      <div id="desktopActionBar" class="desktop-action-bar" role="toolbar" aria-label="Barra de acciones">
+        <button id="btnDeskAttack" type="button" class="desk-btn desk-attack" title="Ataque básico [Espacio o Clic]">
+          <span class="cd-ring" aria-hidden="true"></span>
+          <span class="skill-icon"></span>
+          <span class="desk-btn-text">Atacar</span>
+          <kbd>Espacio</kbd>
+        </button>
+
+        <button id="btnDeskSkillQ" type="button" class="desk-btn desk-skill" title="Habilidad [Q]">
+          <span class="cd-ring" aria-hidden="true"></span>
+          <span class="skill-icon"></span>
+          <span class="skill-short-name desk-btn-text">Hab. Q</span>
+          <span class="skill-cost desk-cost">14</span>
+          <span class="skill-cd-text" aria-hidden="true"></span>
+          <kbd>Q</kbd>
+        </button>
+
+        <button id="btnDeskSkillE" type="button" class="desk-btn desk-skill" title="Habilidad [E]">
+          <span class="cd-ring" aria-hidden="true"></span>
+          <span class="skill-icon"></span>
+          <span class="skill-short-name desk-btn-text">Hab. E</span>
+          <span class="skill-cost desk-cost">16</span>
+          <span class="skill-cd-text" aria-hidden="true"></span>
+          <kbd>E</kbd>
+        </button>
+
+        <button id="btnDeskPotion" type="button" class="desk-btn desk-potion" title="Beber Ambrosía [1]">
+          <span class="skill-icon"></span>
+          <span class="desk-btn-text">Ambrosía</span>
+          <span class="pot-count desk-cost">3</span>
+          <kbd>1</kbd>
+        </button>
+
+        <button id="btnDeskInteract" type="button" class="desk-btn desk-interact" title="Interactuar con Sibila, cofre, altar o escaleras [F]">
+          <span class="skill-icon"></span>
+          <span class="interact-label desk-btn-text">Explorar</span>
+          <kbd>F</kbd>
+        </button>
       </div>
     </div>
-
-    <aside>
-      <div class="card">
-        <h3 id="heroTitle">Héroe</h3>
-        <div>Salud <span id="hpText"></span></div>
-        <div class="bar bar-hp"><div id="hpBar"></div></div>
-        <div>Fervor <span id="manaText"></span></div>
-        <div class="bar bar-mana"><div id="manaBar"></div></div>
-        <div>Experiencia <span id="xpText"></span></div>
-        <div class="bar bar-xp"><div id="xpBar"></div></div>
-        <div class="stat-row">
-          <span>Dracmas: <strong id="goldText">0</strong></span>
-          <button id="btnPotion">Ambrosía [1] (<span id="potText">3</span>)</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Hazañas del Acto I (Oráculos)</h3>
-        <div id="questsBox"></div>
-      </div>
-
-      <div class="card">
-        <h3>Habilidades Activas <span id="synergyBadge" style="color:#38bdf8;font-size:10px;text-transform:none"></span></h3>
-        <div class="stat-row"><button id="btnSkillQ" style="width:100%;text-align:left"></button></div>
-        <div class="stat-row"><button id="btnSkillE" style="width:100%;text-align:left"></button></div>
-      </div>
-
-      <div class="card">
-        <h3>Árbol de Talentos <span id="skillPtsText" style="color:#facc15"></span></h3>
-        <div id="treesBox"></div>
-      </div>
-
-      <div class="card">
-        <h3>Atributos <span id="ptsText" style="color:#facc15"></span></h3>
-        <div id="statsBox"></div>
-      </div>
-
-      <div class="card">
-        <h3>Equipo</h3>
-        <div id="equipBox"></div>
-      </div>
-
-      <div class="card">
-        <h3>Mochila (clic equipa)</h3>
-        <div id="invBox"></div>
-      </div>
-
-      <div class="card">
-        <h3>Crónica del Aqueronte</h3>
-        <ul id="logBox" class="log-list"></ul>
-      </div>
-    </aside>
   </main>
 
-  <script type="module">
-    import { HERO_CLASSES } from './src/core/combat.js';
-    import { CLASS_BASE_ITEMS } from './src/core/loot.js';
-    import { ArchGame } from './src/game/engine.js';
-    import { HeroPreview3D } from './src/game/models3d.js';
+  <!-- Cajón Deslizable (Ítems, Héroe/Talentos, Oráculos/Controles) -->
+  <dialog id="gameDrawer" class="drawer-dialog" closedby="any" aria-label="Panel del Héroe, Ítems y Oráculos">
+    <div class="drawer-sheet">
+      <div class="drawer-header">
+        <div>
+          <strong id="drawerHeroName" class="drawer-title">Héroe</strong>
+          <div id="drawerGoldText" class="drawer-sub">0 Dracmas</div>
+        </div>
+        <button id="btnCloseDrawer" type="button" class="hud-btn hud-icon-only" aria-label="Cerrar panel" autofocus>
+          <span id="iconCloseDrawer" class="hud-btn-icon"></span>
+        </button>
+      </div>
 
-    let selectedClass = 'hoplita';
-    const classGrid = document.getElementById('classGrid');
-    const previewBox = document.getElementById('classPreviewBox');
-    const modal = document.getElementById('startModal');
-    const heroPreview3d = new HeroPreview3D(document.getElementById('heroPreviewCanvas'));
+      <div class="drawer-tabs" role="tablist" focusgroup="tablist nomemory" aria-label="Secciones del héroe">
+        <button id="tabBtnItems" type="button" role="tab" aria-selected="true" focusgroupstart>🎒 Ítems y Equipo</button>
+        <button id="tabBtnHero" type="button" role="tab" aria-selected="false">⚡ Héroe y Talentos</button>
+        <button id="tabBtnQuests" type="button" role="tab" aria-selected="false">📜 Oráculos y Opciones</button>
+      </div>
 
-    function renderClassCards() {
-      classGrid.innerHTML = '';
-      for (const cls of Object.values(HERO_CLASSES)) {
-        const btn = document.createElement('button');
-        btn.className = `class-card ${cls.id === selectedClass ? 'selected' : ''}`;
-        const treesText = (cls.trees || []).join(' · ');
-        btn.innerHTML = `
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px">
-            <strong style="color:${cls.color}">${cls.name}</strong>
-            <span style="font-size:10px;background:#1e293b;color:#cbd5e1;padding:1px 6px;border-radius:99px">${cls.d2Class || ''}</span>
+      <div class="drawer-body">
+        <section id="tabPanelItems" role="tabpanel" aria-labelledby="tabBtnItems" tabindex="0">
+          <div class="card">
+            <h3>Equipo Actual</h3>
+            <div id="equipBox"></div>
           </div>
-          <div style="font-size:11px;color:#94a3b8;margin-top:4px">${cls.subtitle}</div>
-          <div style="font-size:10px;color:#64748b;margin-top:4px">${treesText}</div>
-        `;
-        btn.onclick = () => {
-          selectedClass = cls.id;
-          renderClassCards();
-        };
-        classGrid.appendChild(btn);
-      }
+          <div class="card">
+            <h3>Mochila (toca un objeto para comparar)</h3>
+            <div id="invBox"></div>
+          </div>
+        </section>
 
-      heroPreview3d.setClass(selectedClass);
-      const sel = HERO_CLASSES[selectedClass];
-      const starter = CLASS_BASE_ITEMS[selectedClass];
-      previewBox.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
-          <div><strong style="color:${sel.color};font-size:14px">${sel.name}</strong> <span style="color:#94a3b8;font-size:12px">· ${sel.origin}</span></div>
-          <span style="font-size:11px;color:#60a5fa">Reliquia inicial: <strong>${starter.name}</strong> (+1 Talentos)</span>
-        </div>
-        <p style="margin:6px 0;color:#cbd5e1;font-size:12px;font-style:italic">«${sel.prologue}»</p>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#94a3b8">
-          <span><strong>[Q] ${sel.skills.q.name}:</strong> ${sel.skills.q.desc}</span>
-          <span><strong>[E] ${sel.skills.e.name}:</strong> ${sel.skills.e.desc}</span>
-        </div>
-      `;
-    }
-    renderClassCards();
-
-    const game = new ArchGame({
-      canvas: document.getElementById('gameCanvas'),
-      onUiUpdate(state) {
-        const { hero, derived, classDef, floor, biome, log, skills } = state;
-        document.getElementById('floorLabel').textContent = `Acto I · Piso ${floor} · ${biome}`;
-        document.getElementById('heroTitle').textContent = `${hero.name} (Nv. ${hero.level})`;
-        document.getElementById('hpText').textContent = `${hero.hp}/${derived.maxHp}`;
-        document.getElementById('hpBar').style.width = `${Math.max(0, (hero.hp / derived.maxHp) * 100)}%`;
-        document.getElementById('manaText').textContent = `${Math.floor(hero.mana)}/${derived.maxMana}`;
-        document.getElementById('manaBar').style.width = `${Math.max(0, (hero.mana / derived.maxMana) * 100)}%`;
-        document.getElementById('xpText').textContent = `${hero.xp}/${hero.xpNext}`;
-        document.getElementById('xpBar').style.width = `${Math.min(100, (hero.xp / hero.xpNext) * 100)}%`;
-        document.getElementById('goldText').textContent = hero.gold;
-        document.getElementById('potText').textContent = hero.potions;
-        document.getElementById('synergyBadge').textContent = `Poder ×${derived.skillPowerMult} (Sinergia +${derived.synergyBonusPct}%)`;
-        document.getElementById('btnSkillQ').textContent = `[Q] ${skills.q.name} (${skills.q.cost} fervor) — ${skills.q.desc}`;
-        document.getElementById('btnSkillE').textContent = `[E] ${skills.e.name} (${skills.e.cost} fervor) — ${skills.e.desc}`;
-        document.getElementById('ptsText').textContent = hero.statPoints > 0 ? `(+${hero.statPoints})` : '';
-        document.getElementById('skillPtsText').textContent =
-          hero.skillPoints > 0 ? `(+${hero.skillPoints} disponible${hero.skillPoints > 1 ? 's' : ''})` : '';
-
-        // Hazañas del Acto I (Quests)
-        const questsBox = document.getElementById('questsBox');
-        questsBox.innerHTML = '';
-        for (const q of hero.quests || []) {
-          const qDiv = document.createElement('div');
-          qDiv.style.padding = '4px 0';
-          qDiv.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
-          const statusColor = q.completed ? '#4ade80' : '#facc15';
-          const badge = q.completed ? '✔ Cumplida' : `${q.progress}/${q.targetCount}`;
-          qDiv.innerHTML = `
-            <div style="display:flex;justify-content:space-between;font-size:11px">
-              <strong style="color:${q.completed ? '#86efac' : '#e2e8f0'}">${q.title}</strong>
-              <span style="color:${statusColor}">${badge}</span>
+        <section id="tabPanelHero" role="tabpanel" aria-labelledby="tabBtnHero" hidden>
+          <div class="card">
+            <h3>Poder de Combate</h3>
+            <div id="heroPowerSummary" class="summary-grid"></div>
+          </div>
+          <div class="card">
+            <h3>Atributos <span id="ptsText" class="gold-accent"></span></h3>
+            <div id="statsBox"></div>
+          </div>
+          <div class="card">
+            <h3>Árbol de Talentos <span id="skillPtsText" class="gold-accent"></span></h3>
+            <div id="treesBox"></div>
+          </div>
+          <div class="card">
+            <h3>Habilidades Activas <span id="synergyBadge" class="synergy-badge"></span></h3>
+            <div class="drawer-skill-btns">
+              <button id="btnSkillQ" type="button" class="drawer-skill-btn"></button>
+              <button id="btnSkillE" type="button" class="drawer-skill-btn"></button>
+              <button id="btnPotion" type="button" class="drawer-skill-btn">Ambrosía [1] (<span class="pot-count">3</span>)</button>
             </div>
-            <div style="font-size:10px;color:#94a3b8">${q.desc}</div>
-            <div style="font-size:10px;color:#60a5fa">Don: ${q.rewardText}</div>
-          `;
-          questsBox.appendChild(qDiv);
-        }
+          </div>
+        </section>
 
-        // Árbol de Talentos y Sinergias (3 ramas)
-        const treesBox = document.getElementById('treesBox');
-        treesBox.innerHTML = '';
-        (classDef.trees || []).forEach((treeName, idx) => {
-          const baseLv = derived.baseTrees[idx] || 0;
-          const effLv = derived.effectiveTrees[idx] || 0;
-          const bonusTag = derived.allSkillBonus > 0 ? ` <span style="color:#60a5fa">(+${derived.allSkillBonus} eq.)</span>` : '';
-          const row = document.createElement('div');
-          row.style.padding = '4px 0';
-          row.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
-          const top = document.createElement('div');
-          top.className = 'stat-row';
-          top.innerHTML = `<span><strong>${treeName}</strong> · Nv. ${effLv} <small style="color:#64748b">[base ${baseLv}]</small>${bonusTag}</span>`;
-          if (hero.skillPoints > 0) {
-            const b = document.createElement('button');
-            b.textContent = '+ Talento';
-            b.className = 'primary';
-            b.style.padding = '2px 7px';
-            b.onclick = () => game.allocateSkill(idx);
-            top.appendChild(b);
-          }
-          const desc = document.createElement('div');
-          desc.style.fontSize = '10px';
-          desc.style.color = '#94a3b8';
-          desc.textContent = classDef.treeDesc?.[idx] || '';
-          row.append(top, desc);
-          treesBox.appendChild(row);
-        });
+        <section id="tabPanelQuests" role="tabpanel" aria-labelledby="tabBtnQuests" hidden>
+          <div class="card">
+            <h3>Hazañas del Acto I (Oráculos)</h3>
+            <div id="questsBox"></div>
+          </div>
+          <div class="card">
+            <h3>Controles y Pantalla</h3>
+            <div class="stat-row">
+              <label for="touchModeSelect">Controles estilo Mobile Legends:</label>
+              <select id="touchModeSelect" class="arch-select">
+                <option value="auto">Automático (táctil)</option>
+                <option value="on">Siempre activos</option>
+                <option value="off">Barra PC (ratón/teclado)</option>
+              </select>
+            </div>
+            <p class="controls-doc">
+              <strong>Móvil horizontal:</strong> Joystick izquierdo para mover y apuntar · Botones derechos para atacar, lanzar [Q]/[E], beber Ambrosía e interactuar.<br />
+              <strong>PC:</strong> WASD / Flechas o Clic para mover · Espacio: atacar · Q/E: habilidades · 1: poción · F: Sibila/cofre/altar/bajar · I/C/K: abrir paneles · Rueda: zoom 3D.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Crónica del Aqueronte</h3>
+            <ul id="logBox" class="log-list"></ul>
+          </div>
+        </section>
+      </div>
+    </div>
+  </dialog>
 
-        // Atributos
-        const statsBox = document.getElementById('statsBox');
-        statsBox.innerHTML = '';
-        const labels = { strength: 'Fuerza', dexterity: 'Destreza', spirit: 'Espíritu', vitality: 'Vitalidad' };
-        for (const [k, lbl] of Object.entries(labels)) {
-          const row = document.createElement('div');
-          row.className = 'stat-row';
-          row.innerHTML = `<span>${lbl}: <strong>${derived.stats[k]}</strong></span>`;
-          if (hero.statPoints > 0) {
-            const b = document.createElement('button');
-            b.textContent = '+';
-            b.onclick = () => game.allocateStat(k);
-            row.appendChild(b);
-          }
-          statsBox.appendChild(row);
-        }
-        const dmgRow = document.createElement('div');
-        dmgRow.className = 'stat-row';
-        dmgRow.innerHTML = `<span>Daño: ${derived.minDamage}–${derived.maxDamage}</span><span>Arm: ${derived.armor} · Crít: ${Math.round(derived.critChance * 100)}%</span>`;
-        statsBox.appendChild(dmgRow);
+  <!-- Selección de Héroe (La Hoguera del Aqueronte) -->
+  <dialog id="startModal" class="start-dialog" aria-labelledby="startTitle">
+    <div class="modal-box">
+      <div class="start-header">
+        <h2 id="startTitle">🔥 La Hoguera del Aqueronte — Selección de Héroe 3D</h2>
+        <span class="start-act-tag">Acto I: El Umbral del Estigia</span>
+      </div>
+      <p class="start-intro">
+        Siete juramentos convergen frente a la barca de Caronte. Elige tu arquetipo griego en 3D, recibe tu reliquia de iniciado y habla con la <strong>Sibila de Cumas [F]</strong>.
+      </p>
 
-        // Equipo
-        const equipBox = document.getElementById('equipBox');
-        equipBox.innerHTML = '';
-        for (const [slot, lbl] of [['weapon', 'Arma'], ['armor', 'Armadura'], ['charm', 'Reliquia']]) {
-          const it = hero.equipment[slot];
-          const row = document.createElement('div');
-          row.className = 'item-row';
-          const skillTag = it?.mods?.skillBonus ? ` (+${it.mods.skillBonus} Tal.)` : '';
-          row.innerHTML = `<span style="color:#94a3b8">${lbl}:</span><span style="color:${it ? it.color : '#64748b'}">${it ? it.name + skillTag : '—'}</span>`;
-          equipBox.appendChild(row);
-        }
+      <div class="class-grid" id="classGrid"></div>
 
-        // Mochila
-        const invBox = document.getElementById('invBox');
-        invBox.innerHTML = hero.inventory.length === 0 ? '<div style="color:#64748b">Vacía</div>' : '';
-        for (const it of hero.inventory) {
-          const row = document.createElement('div');
-          row.className = 'item-row';
-          const btn = document.createElement('button');
-          btn.style.color = it.color;
-          btn.style.flex = '1';
-          btn.style.textAlign = 'left';
-          const skillTag = it?.mods?.skillBonus ? ` (+${it.mods.skillBonus} Tal.)` : '';
-          btn.textContent = `${it.name}${skillTag}`;
-          btn.onclick = () => game.equipItem(it.id);
-          const del = document.createElement('button');
-          del.textContent = '×';
-          del.onclick = () => game.dropInventoryItem(it.id);
-          row.append(btn, del);
-          invBox.appendChild(row);
-        }
+      <div class="card preview-card">
+        <canvas id="heroPreviewCanvas" width="136" height="136"></canvas>
+        <div id="classPreviewBox" class="preview-info"></div>
+      </div>
 
-        const logBox = document.getElementById('logBox');
-        logBox.innerHTML = log.map((l) => `<li>${l}</li>`).join('');
-      },
-    });
+      <div class="start-footer">
+        <div class="start-inputs">
+          <label for="heroNameInput">Nombre:</label>
+          <input id="heroNameInput" placeholder="Ej. Neoptólemo, Atalanta, Casandra..." />
+          <label for="seedInput">Semilla:</label>
+          <input id="seedInput" value="olimpia-01" class="seed-input" />
+        </div>
+        <div class="start-cta-group">
+          <button id="btnCancelStart" type="button" hidden>Volver</button>
+          <button id="btnStart" type="button">Iniciar Acto I</button>
+          <button id="btnStartFullscreen" type="button" class="primary">⛶ Jugar en Pantalla Completa</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
 
-    document.getElementById('btnStart').onclick = () => {
-      modal.classList.add('hidden');
-      game.startNewGame({
-        classId: selectedClass,
-        heroName: document.getElementById('heroNameInput').value,
-        seed: document.getElementById('seedInput').value,
-      });
-    };
-    document.getElementById('btnNewRun').onclick = () => modal.classList.remove('hidden');
-    document.getElementById('btnPotion').onclick = () => game.usePotion();
-    document.getElementById('btnSkillQ').onclick = () => game.castSkill('q');
-    document.getElementById('btnSkillE').onclick = () => game.castSkill('e');
-  </script>
+  <!-- Diálogo de Derrota -->
+  <dialog id="gameOverModal" class="gameover-dialog" aria-labelledby="gameOverTitle">
+    <div class="modal-box gameover-box">
+      <h2 id="gameOverTitle">☠ Has caído en el umbral del Estigia</h2>
+      <p id="gameOverSummary" class="start-intro"></p>
+      <div class="start-cta-group">
+        <button id="btnGameOverBonfire" type="button">🔥 Elegir otro Héroe</button>
+        <button id="btnGameOverRetry" type="button" class="primary">↺ Reintentar descenso</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script type="module" src="./src/ui/main.js"></script>
 </body>
 </html>
