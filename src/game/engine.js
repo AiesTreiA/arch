@@ -19,7 +19,7 @@ import {
   HERO_CLASSES,
   resolveStrike,
 } from '../core/combat.js';
-import { generateItem, getItemPowerScore, getItemSalvageValue, rollEnemyDrop } from '../core/loot.js';
+import { compareItems, generateItem, getItemPowerScore, getItemSalvageValue, rollEnemyDrop } from '../core/loot.js';
 import { ArchRenderer3D } from './models3d.js';
 
 const TILE_W = 56;
@@ -392,6 +392,86 @@ export class ArchGame {
       return (b.ilvl || 1) - (a.ilvl || 1);
     });
     this._notify();
+  }
+
+  autoEquipBest() {
+    if (!this.hero || !this.hero.inventory || this.hero.inventory.length === 0) {
+      this.addFloater(this.pos.x, this.pos.y, 'Mochila vacía', '#94a3b8');
+      return 0;
+    }
+
+    const slots = ['weapon', 'armor', 'charm'];
+    let equippedCount = 0;
+
+    for (const slot of slots) {
+      const currentEquipped = this.hero.equipment[slot];
+      const curScore = currentEquipped ? getItemPowerScore(currentEquipped, this.hero.classId) : -Infinity;
+
+      let bestScore = curScore;
+      let bestItem = null;
+
+      for (const item of this.hero.inventory) {
+        if (item.slot !== slot) continue;
+        const score = getItemPowerScore(item, this.hero.classId);
+        if (score > bestScore) {
+          bestScore = score;
+          bestItem = item;
+        }
+      }
+
+      if (bestItem) {
+        this.equipItem(bestItem.id);
+        equippedCount++;
+      }
+    }
+
+    if (equippedCount > 0) {
+      this.addFloater(this.pos.x, this.pos.y, `¡Equipado lo superior! (+${equippedCount})`, '#4ade80');
+      this.addLog(`Auto-equipado: se equiparon ${equippedCount} objeto(s) superior(es).`);
+    } else {
+      this.addFloater(this.pos.x, this.pos.y, 'Ya tienes tu mejor equipo', '#94a3b8');
+      this.addLog('Ya tienes equipado el mejor equipo disponible en tu mochila.');
+    }
+    this._notify();
+    return equippedCount;
+  }
+
+  salvageInferiorItems() {
+    if (!this.hero || !this.hero.inventory || this.hero.inventory.length === 0) {
+      this.addFloater(this.pos.x, this.pos.y, 'Mochila vacía', '#94a3b8');
+      return { count: 0, goldGain: 0 };
+    }
+
+    const toSalvage = [];
+    for (const item of this.hero.inventory) {
+      const equipped = this.hero.equipment[item.slot];
+      const cmp = compareItems(item, equipped, this.hero.classId);
+      if (cmp.verdict === 'worse') {
+        toSalvage.push(item);
+      }
+    }
+
+    if (toSalvage.length === 0) {
+      this.addFloater(this.pos.x, this.pos.y, 'Sin objetos inferiores', '#94a3b8');
+      this.addLog('No tienes objetos inferiores para ofrendar.');
+      return { count: 0, goldGain: 0 };
+    }
+
+    let totalGold = 0;
+    const inferiorIds = new Set(toSalvage.map((i) => i.id));
+    this.hero.inventory = this.hero.inventory.filter((item) => {
+      if (inferiorIds.has(item.id)) {
+        totalGold += getItemSalvageValue(item);
+        return false;
+      }
+      return true;
+    });
+
+    this.hero.gold += totalGold;
+    this.addFloater(this.pos.x, this.pos.y, `+${totalGold} dracmas`, '#facc15');
+    this.addLog(`Ofrendaste ${toSalvage.length} objeto(s) inferior(es) por ${totalGold} dracmas.`);
+    this._notify();
+    return { count: toSalvage.length, goldGain: totalGold };
   }
 
   dropInventoryItem(itemId) {

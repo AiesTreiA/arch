@@ -4,6 +4,7 @@
 import { HERO_CLASSES } from '../core/combat.js';
 import {
   compareItems,
+  getItemPowerScore,
   getItemSalvageValue,
   getItemStatEntries,
   SLOT_LABELS,
@@ -135,13 +136,49 @@ export function createItemsPanelController({ equipRoot, invRoot, game }) {
       filterGroup.appendChild(btn);
     }
 
-    const sortBtn = el('button', 'btn-sort');
+    // Calcular cuántos objetos superiores e inferiores hay en la mochila
+    let superiorCount = 0;
+    for (const slot of ['weapon', 'armor', 'charm']) {
+      const eq = hero.equipment[slot];
+      const curScore = eq ? getItemPowerScore(eq, hero.classId) : -Infinity;
+      if (inventory.some((it) => it.slot === slot && getItemPowerScore(it, hero.classId) > curScore)) {
+        superiorCount++;
+      }
+    }
+
+    const inferiorCount = inventory.filter((it) => {
+      const eq = hero.equipment[it.slot];
+      return compareItems(it, eq, hero.classId).verdict === 'worse';
+    }).length;
+
+    const quickActions = el('div', 'inv-quick-actions');
+
+    const autoEquipBtn = el(
+      'button',
+      `btn-quick-action btn-auto-equip ${superiorCount > 0 ? 'has-badge' : ''}`
+    );
+    autoEquipBtn.type = 'button';
+    autoEquipBtn.title = 'Equipar automáticamente los mejores objetos para tu clase';
+    autoEquipBtn.innerHTML = `${UI_ICONS.autoEquip || ''}<span>Equipar Mejor${superiorCount > 0 ? ` (${superiorCount})` : ''}</span>`;
+    autoEquipBtn.onclick = () => game.autoEquipBest();
+
+    const salvageAllBtn = el(
+      'button',
+      `btn-quick-action btn-salvage-all ${inferiorCount > 0 ? 'has-badge' : ''}`
+    );
+    salvageAllBtn.type = 'button';
+    salvageAllBtn.title = 'Ofrendar todos los objetos inferiores a tu equipo actual a cambio de dracmas';
+    salvageAllBtn.innerHTML = `${UI_ICONS.salvage || ''}<span>Ofrendar Inferiores${inferiorCount > 0 ? ` (${inferiorCount})` : ''}</span>`;
+    salvageAllBtn.onclick = () => game.salvageInferiorItems();
+
+    const sortBtn = el('button', 'btn-quick-action btn-sort');
     sortBtn.type = 'button';
     sortBtn.title = 'Ordenar mochila por rareza y poder';
     sortBtn.innerHTML = `${UI_ICONS.sort}<span>Ordenar</span>`;
     sortBtn.onclick = () => game.sortInventory();
 
-    toolbar.append(filterGroup, sortBtn);
+    quickActions.append(autoEquipBtn, salvageAllBtn, sortBtn);
+    toolbar.append(filterGroup, quickActions);
     invRoot.appendChild(toolbar);
 
     const visibleItems =

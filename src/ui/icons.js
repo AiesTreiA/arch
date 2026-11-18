@@ -19,6 +19,8 @@ export const UI_ICONS = {
   gamepad: svgWrap('<rect x="3" y="7" width="18" height="10" rx="5"/><path d="M8 10v4M6 12h4"/><circle cx="15.5" cy="11" r="0.9" fill="currentColor"/><circle cx="17.5" cy="13" r="0.9" fill="currentColor"/>'),
   close: svgWrap('<path d="M6 6l12 12M18 6 6 18"/>'),
   sort: svgWrap('<path d="M4 7h11M4 12h8M4 17h5"/><path d="m17 7 3 3-3 3M20 10h-5"/>'),
+  autoEquip: svgWrap('<path d="m12 3 2.5 5 5.5.8-4 3.9.9 5.5L12 15.6l-4.9 2.6.9-5.5-4-3.9 5.5-.8L12 3Z"/>'),
+  salvage: svgWrap('<path d="M12 2c2 3 4 5.5 4 8.5a4 4 0 1 1-8 0c0-3 2-5.5 4-8.5Z"/><circle cx="12" cy="14" r="1.5"/>'),
 };
 
 export const SLOT_ICONS = {

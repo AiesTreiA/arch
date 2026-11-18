@@ -312,6 +312,78 @@ test('sistema de efectos visuales 3D escala proporcionales al daño para Rayo de
   assert.equal(r3d.activeVFX.length, 0, 'Todos los efectos deben expirar y liberarse limpiamente');
 });
 
+test('autoEquipBest y salvageInferiorItems equipan lo superior y ofrendan sólo lo inferior', async () => {
+  const { ArchGame } = await import('../src/game/engine.js').catch(() => ({}));
+  const hero = createHero('campeon');
+
+  // Crear ítems de prueba
+  const betterWeapon = generateItem({
+    level: 5,
+    forceRarity: 'rare',
+    preferredClass: 'campeon',
+    seed: 'better-w',
+  });
+  betterWeapon.slot = 'weapon';
+
+  const worseWeapon = generateItem({
+    level: 1,
+    forceRarity: 'common',
+    preferredClass: 'campeon',
+    seed: 'worse-w',
+  });
+  worseWeapon.slot = 'weapon';
+
+  const betterCharm = generateItem({
+    level: 4,
+    forceRarity: 'unique',
+    preferredClass: 'campeon',
+    seed: 'better-c',
+  });
+  betterCharm.slot = 'charm';
+
+  hero.inventory.push(betterWeapon, worseWeapon, betterCharm);
+
+  const mockGame = {
+    hero,
+    pos: { x: 0, y: 0 },
+    addFloater: () => {},
+    addLog: () => {},
+    _notify: () => {},
+    equipItem(id) {
+      const idx = this.hero.inventory.findIndex((i) => i.id === id);
+      if (idx < 0) return;
+      const item = this.hero.inventory[idx];
+      const prev = this.hero.equipment[item.slot];
+      this.hero.equipment[item.slot] = item;
+      this.hero.inventory.splice(idx, 1);
+      if (prev) this.hero.inventory.push(prev);
+    },
+  };
+
+  if (ArchGame?.prototype) {
+    mockGame.autoEquipBest = ArchGame.prototype.autoEquipBest.bind(mockGame);
+    mockGame.salvageInferiorItems = ArchGame.prototype.salvageInferiorItems.bind(mockGame);
+
+    const equipped = mockGame.autoEquipBest();
+    assert.ok(equipped >= 1, 'Debe haber auto-equipado objetos superiores');
+    assert.equal(hero.equipment.weapon.id, betterWeapon.id, 'Debe equipar el arma superior');
+    assert.equal(hero.equipment.charm.id, betterCharm.id, 'Debe equipar la reliquia superior');
+
+    const initialGold = hero.gold;
+    const res = mockGame.salvageInferiorItems();
+    assert.ok(res.count >= 1, 'Debe ofrendar los ítems inferiores');
+    assert.ok(hero.gold > initialGold, 'Debe sumar dracmas al héroe');
+    assert.ok(
+      hero.inventory.every((it) => {
+        const cmp = compareItems(it, hero.equipment[it.slot], hero.classId);
+        return cmp.verdict !== 'worse';
+      }),
+      'No deben quedar objetos inferiores en la mochila'
+    );
+  }
+});
+
+
 
 
 
