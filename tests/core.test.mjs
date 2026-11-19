@@ -383,6 +383,83 @@ test('autoEquipBest y salvageInferiorItems equipan lo superior y ofrendan sólo 
   }
 });
 
+test('modelos 3D de botín en el suelo tienen formas y texturas realistas y reflejan el equipo en el héroe', async () => {
+  const { createGroundDropMesh3D, createHeroMesh3D, updateHeroEquipmentVisuals } = await import(
+    '../src/game/models3d.js'
+  );
+
+  // 1. Probar modelos 3D de botín en el suelo (Oro, Poción y diversos Ítems)
+  const goldDrop = { x: 3, y: 3, kind: 'gold', amount: 45 };
+  const goldMesh = createGroundDropMesh3D(goldDrop);
+  assert.ok(goldMesh.isGroup);
+  const goldBob = goldMesh.getObjectByName('bobGroup');
+  assert.ok(goldBob, 'El drop de oro debe contener bobGroup articulado');
+  assert.ok(goldBob.children.length >= 6, 'El oro debe ser una pila de dracmas detalladas y destello');
+
+  const potionDrop = { x: 4, y: 4, kind: 'potion', amount: 1 };
+  const potionMesh = createGroundDropMesh3D(potionDrop);
+  const potionBob = potionMesh.getObjectByName('bobGroup');
+  assert.ok(potionBob.children.length >= 1, 'El frasco de ambrosía debe construirse con cuello, líquido y corcho');
+
+  // Ítems de distintos arquetipos (Espada, Lanza, Arco, Báculo, Coraza, Escudo, Yelmo)
+  const swordItem = { key: 'xiphos', name: 'Xiphos de Bronce', slot: 'weapon', rarity: 'magic' };
+  const spearItem = { key: 'dory', name: 'Lanza Dory', slot: 'weapon', rarity: 'rare' };
+  const bowItem = { key: 'bow', name: 'Arco de Tejo', slot: 'weapon', rarity: 'common' };
+  const cuirassItem = { key: 'cuirass', name: 'Coraza Hoplita', slot: 'armor', rarity: 'rare' };
+  const shieldItem = { key: 'hoplon', name: 'Escudo Hoplón', slot: 'charm', rarity: 'unique' };
+  const helmItem = { key: 'helm_thrace', name: 'Yelmo Tracio', slot: 'charm', rarity: 'rare' };
+
+  for (const item of [swordItem, spearItem, bowItem, cuirassItem, shieldItem, helmItem]) {
+    const drop = { x: 1, y: 1, kind: 'item', item };
+    const m = createGroundDropMesh3D(drop);
+    assert.ok(m.isGroup);
+    const bob = m.getObjectByName('bobGroup');
+    assert.ok(bob && bob.children.length > 0, `El ítem ${item.name} debe tener un modelo 3D reconocible`);
+    // Comprobar haz de luz de rareza vertical
+    const hasBeam = m.children.some((c) => c.isMesh && c.geometry.type === 'CylinderGeometry');
+    assert.ok(hasBeam, `El ítem ${item.name} debe incluir columna vertical de luz de rareza`);
+  }
+
+  // 2. Probar reflejo visual de equipamiento en el modelo 3D del héroe
+  const heroMesh = createHeroMesh3D('hoplita');
+  const rig = heroMesh.userData.rig;
+  assert.ok(rig.weaponSlot, 'Hero rig debe tener weaponSlot');
+  assert.ok(rig.offhandSlot, 'Hero rig debe tener offhandSlot');
+  assert.ok(rig.armorSlot, 'Hero rig debe tener armorSlot');
+  assert.ok(rig.headgearSlot, 'Hero rig debe tener headgearSlot');
+  assert.ok(rig.torsoMesh, 'Hero rig debe tener torsoMesh');
+
+  // Equipar Xiphos mágico y Coraza rara
+  updateHeroEquipmentVisuals(
+    heroMesh,
+    {
+      weapon: swordItem,
+      armor: cuirassItem,
+      charm: shieldItem,
+    },
+    'hoplita'
+  );
+
+  assert.ok(rig.weaponSlot.children.length > 0, 'weaponSlot debe alojar la espada Xiphos 3D');
+  assert.ok(rig.offhandSlot.children.length > 0, 'offhandSlot debe alojar el escudo Aspis 3D');
+  assert.ok(rig.armorSlot.children.length > 0, 'armorSlot debe alojar las hombreras/spaulders de coraza');
+
+  // Equipar Arco y Yelmo
+  updateHeroEquipmentVisuals(
+    heroMesh,
+    {
+      weapon: bowItem,
+      armor: null,
+      charm: helmItem,
+    },
+    'arquera'
+  );
+
+  assert.ok(rig.weaponSlot.children.length > 0, 'weaponSlot debe alojar la flecha');
+  assert.ok(rig.offhandSlot.children.length > 0, 'offhandSlot debe sostener el arco');
+  assert.ok(rig.headgearSlot.children.length > 0, 'headgearSlot debe alojar el yelmo tracio');
+});
+
 
 
 

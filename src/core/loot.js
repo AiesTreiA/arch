@@ -126,6 +126,7 @@ const RARE_TITLES = [
 
 export const UNIQUE_RELICS = [
   {
+    key: 'dory_achilles',
     name: 'Lanza de Aquiles',
     slot: 'weapon',
     forClass: 'campeon',
@@ -134,6 +135,7 @@ export const UNIQUE_RELICS = [
     lore: 'Forjada para atravesar murallas en Troya.',
   },
   {
+    key: 'aegis_athena',
     name: 'Égida de Atenea',
     slot: 'armor',
     forClass: 'hoplita',
@@ -142,6 +144,7 @@ export const UNIQUE_RELICS = [
     lore: 'Resiste incluso el aliento de la Gorgona.',
   },
   {
+    key: 'bow_apollo',
     name: 'Arco de Apolo y Artemisa',
     slot: 'weapon',
     forClass: 'arquera',
@@ -150,6 +153,7 @@ export const UNIQUE_RELICS = [
     lore: 'Sus flechas plateadas jamás yerran en la penumbra.',
   },
   {
+    key: 'caduceus_delphi',
     name: 'Caduceo de Delfos',
     slot: 'weapon',
     forClass: 'oraculo',
@@ -158,6 +162,7 @@ export const UNIQUE_RELICS = [
     lore: 'Canaliza los presagios y el rayo de Zeus.',
   },
   {
+    key: 'scepter_hades',
     name: 'Cetro de Hades y Perséfone',
     slot: 'weapon',
     forClass: 'necromante',
@@ -166,6 +171,7 @@ export const UNIQUE_RELICS = [
     lore: 'Las sombras del Estigia obedecen a su portador.',
   },
   {
+    key: 'katar_tisiphone',
     name: 'Colmillo de Tisífone',
     slot: 'weapon',
     forClass: 'sombra',
@@ -174,6 +180,7 @@ export const UNIQUE_RELICS = [
     lore: 'Templado en las lágrimas de los culpables en el Érebo.',
   },
   {
+    key: 'pelt_callisto',
     name: 'Piel Sagrada de Calisto',
     slot: 'armor',
     forClass: 'coribante',
@@ -182,6 +189,7 @@ export const UNIQUE_RELICS = [
     lore: 'Quien la viste escucha el latido primordial de Gea.',
   },
   {
+    key: 'sandals_hermes',
     name: 'Sandalias de Hermes',
     slot: 'charm',
     baseArmor: 10,
@@ -217,6 +225,8 @@ export function createStarterItem(classId = 'hoplita') {
   const clsBase = CLASS_BASE_ITEMS[classId] || CLASS_BASE_ITEMS.hoplita;
   return {
     id: `itm-starter-${classId}-${nextItemId++}`,
+    key: clsBase.key,
+    baseKey: clsBase.key,
     name: `${clsBase.name} de Iniciado`,
     slot: clsBase.slot,
     forClass: clsBase.forClass,
@@ -253,6 +263,8 @@ export function generateItem({
     const relic = classPool.length > 0 && rng.chance(0.65) ? rng.pick(classPool) : rng.pick(UNIQUE_RELICS);
     return {
       id: `itm-${nextItemId++}`,
+      key: relic.key || 'relic_unique',
+      baseKey: relic.key || 'relic_unique',
       name: relic.name,
       slot: relic.slot,
       forClass: relic.forClass || null,
@@ -310,6 +322,8 @@ export function generateItem({
   const scale = 1 + (ilvl - 1) * 0.14;
   return {
     id: `itm-${nextItemId++}`,
+    key: base.key,
+    baseKey: base.key,
     name,
     slot: base.slot,
     forClass: base.forClass || null,
@@ -475,5 +489,41 @@ export function compareItems(candidate, equipped, preferredClass = null) {
 
   const verdict = scoreDiff > 2 ? 'better' : scoreDiff < -2 ? 'worse' : 'even';
   return { verdict, scoreDiff, diffs };
+}
+
+/**
+ * Retorna el arquetipo visual 3D de un ítem para su renderizado en suelo y personaje.
+ * Arquetipos: 'sword', 'spear', 'bow', 'staff', 'katar', 'orb', 'cuirass', 'chlamys', 'pelt', 'shield', 'helm', 'sandals', 'mask', 'amulet'.
+ */
+export function getItemVisualType(item) {
+  if (!item) return 'sword';
+  const key = String(item.key || item.baseKey || '').toLowerCase();
+  const name = String(item.name || '').toLowerCase();
+  const slot = item.slot || 'weapon';
+
+  if (slot === 'weapon') {
+    if (key.includes('bow') || name.includes('arco')) return 'bow';
+    if (key.includes('dory') || key.includes('spear') || key.includes('lanza') || name.includes('lanza') || name.includes('dory') || name.includes('pica')) return 'spear';
+    if (key.includes('staff') || key.includes('caduceus') || key.includes('scepter') || key.includes('cetro') || name.includes('báculo') || name.includes('caduceo') || name.includes('cetro') || name.includes('vara')) return 'staff';
+    if (key.includes('katar') || key.includes('fang') || name.includes('katar') || name.includes('garra') || name.includes('colmillo') || name.includes('daga')) return 'katar';
+    if (key.includes('orb') || name.includes('orbe')) return 'orb';
+    return 'sword';
+  }
+
+  if (slot === 'armor') {
+    if (key.includes('chlamys') || name.includes('clámide') || name.includes('manto') || name.includes('túnica')) return 'chlamys';
+    if (key.includes('pelt') || name.includes('piel') || name.includes('lobo') || name.includes('calisto')) return 'pelt';
+    return 'cuirass';
+  }
+
+  if (slot === 'charm') {
+    if (key.includes('hoplon') || key.includes('aspis') || name.includes('escudo') || name.includes('aspis') || name.includes('hoplón') || name.includes('égida')) return 'shield';
+    if (key.includes('helm') || name.includes('yelmo') || name.includes('casco') || name.includes('corona') || name.includes('diadema')) return 'helm';
+    if (key.includes('sandal') || name.includes('sandalias') || name.includes('grebas')) return 'sandals';
+    if (key.includes('pelt') || key.includes('lycaon') || name.includes('máscara') || name.includes('licaón')) return 'mask';
+    return 'amulet';
+  }
+
+  return 'sword';
 }
 

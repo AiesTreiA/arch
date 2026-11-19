@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { HERO_CLASSES } from '../core/combat.js';
 import { TILE_SHRINE, TILE_STAIRS, TILE_WALL } from '../core/dungeon.js';
+import { getItemVisualType } from '../core/loot.js';
 
 // Escala ortográfica exacta para coincidir al píxel con toIso(gx, gy) donde TILE_W=56, TILE_H=28
 export const ISO_SCALE = 28 * Math.SQRT2; // 39.5979797...
@@ -53,6 +54,782 @@ export function disposeObject3D(obj) {
       }
     }
   });
+}
+
+/**
+ * Crea el modelo 3D estilizado y reconocible de un ítem según su arquetipo visual y rareza.
+ */
+export function createItemVisualMesh3D(visualType, rarity = 'common', rarityColor = 0xd6d3d1, rarityEmissive = 0x292524, rarityIntensity = 0.2) {
+  const root = new THREE.Group();
+  root.name = `itemVisual-${visualType}-${rarity}`;
+
+  const bronzeMat = mat(0xd99b43, { roughness: 0.32, metalness: 0.78 });
+  const goldMat = mat(0xfacc15, { roughness: 0.22, metalness: 0.9, emissive: 0x854d0e, emissiveIntensity: 0.35 });
+  const leatherMat = mat(0x5c3a21, { roughness: 0.8, metalness: 0.1 });
+  const steelMat = mat(0xe2e8f0, { roughness: 0.2, metalness: 0.85 });
+  const woodMat = mat(0x78350f, { roughness: 0.75, metalness: 0.15 });
+
+  const bladeMat = mat(rarity === 'common' ? 0xe2e8f0 : rarityColor, {
+    metalness: 0.85,
+    roughness: 0.2,
+    emissive: rarity === 'common' ? 0x000000 : rarityEmissive,
+    emissiveIntensity: rarityIntensity,
+  });
+
+  if (visualType === 'sword') {
+    // Espada Xiphos griega de doble filo
+    const hilt = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.12, 6), leatherMat);
+    hilt.position.y = -0.06;
+    const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.026, 6, 6), bronzeMat);
+    pommel.position.y = -0.13;
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.024, 0.036), bronzeMat);
+    guard.position.y = 0.01;
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.44, 0.016), bladeMat);
+    blade.position.y = 0.24;
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.09, 4), bladeMat);
+    tip.position.y = 0.5;
+    root.add(hilt, pommel, guard, blade, tip);
+    root.rotation.z = -0.45;
+
+  } else if (visualType === 'spear') {
+    // Lanza Dory con punta de hoja y regatón de bronce
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.92, 6), woodMat);
+    const spearTip = new THREE.Mesh(new THREE.ConeGeometry(0.042, 0.22, 6), bladeMat);
+    spearTip.position.y = 0.55;
+    const butt = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.09, 6), bronzeMat);
+    butt.position.y = -0.5;
+    butt.rotation.x = Math.PI;
+    root.add(shaft, spearTip, butt);
+    root.rotation.z = -0.55;
+
+  } else if (visualType === 'bow') {
+    // Arco recurvo griego y flecha emplumada
+    const arc = new THREE.Mesh(
+      new THREE.TorusGeometry(0.25, 0.02, 6, 16, Math.PI * 1.15),
+      mat(rarityColor, { metalness: 0.6, roughness: 0.3, emissive: rarityEmissive, emissiveIntensity: rarityIntensity * 0.5 })
+    );
+    arc.rotation.z = -Math.PI * 0.57;
+    arc.rotation.y = Math.PI / 2;
+    const bowString = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.48, 4), steelMat);
+    bowString.position.z = -0.035;
+    const arrow = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.44, 5), bladeMat);
+    arrow.rotation.x = Math.PI / 2;
+    arrow.position.set(0, 0, 0.02);
+    root.add(arc, bowString, arrow);
+    root.rotation.x = 0.35;
+    root.rotation.y = 0.4;
+
+  } else if (visualType === 'staff') {
+    // Báculo sagrado coronado con anillo dorado y gema mística flotante
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.016, 0.86, 6), woodMat);
+    pole.position.y = 0.08;
+    const crown = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.016, 6, 14), goldMat);
+    crown.position.y = 0.55;
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.062, 0), bladeMat);
+    gem.position.y = 0.55;
+    root.add(pole, crown, gem);
+    root.rotation.z = -0.28;
+
+  } else if (visualType === 'katar') {
+    // Daga de empuje / Katar con hojas gemelas
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.09), bronzeMat);
+    const b1 = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.3, 4), bladeMat);
+    b1.rotation.x = Math.PI / 2;
+    b1.position.set(-0.022, 0, 0.16);
+    const b2 = b1.clone();
+    b2.position.x = 0.022;
+    root.add(grip, b1, b2);
+    root.rotation.x = 0.3;
+
+  } else if (visualType === 'orb') {
+    // Orbe oracular flotante con anillo orbital
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.014, 6, 16), goldMat);
+    ring.rotation.x = Math.PI / 2;
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.075, 0), bladeMat);
+    root.add(ring, core);
+
+  } else if (visualType === 'cuirass') {
+    // Coraza / Peto anatómico griego con faldoncillo de pteruges
+    const chestMat = mat(rarity === 'common' ? 0xd99b43 : rarityColor, {
+      metalness: 0.85,
+      roughness: 0.25,
+      emissive: rarity === 'common' ? 0x000000 : rarityEmissive,
+      emissiveIntensity: rarityIntensity * 0.45,
+    });
+    const breastplate = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.28, 0.14), chestMat);
+    breastplate.position.y = 0.12;
+    // Músculos pectorales esculpidos
+    for (const sx of [-0.05, 0.05]) {
+      const pec = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), chestMat);
+      pec.scale.set(1, 0.8, 0.5);
+      pec.position.set(sx, 0.16, 0.07);
+      root.add(pec);
+    }
+    // Tiras de cuero colgantes (pteruges)
+    for (let i = -2; i <= 2; i++) {
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.09, 0.012), leatherMat);
+      strip.position.set(i * 0.045, -0.06, 0.06);
+      root.add(strip);
+    }
+    root.add(breastplate);
+    root.rotation.y = 0.35;
+
+  } else if (visualType === 'chlamys') {
+    // Clámide / Manto griego plegado con broche de oro
+    const clothMat = mat(rarity === 'common' ? 0x7c2d12 : rarityColor, {
+      roughness: 0.75,
+      metalness: 0.2,
+      emissive: rarity === 'common' ? 0x000000 : rarityEmissive,
+      emissiveIntensity: rarityIntensity * 0.35,
+    });
+    const fold = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.16, 0.18), clothMat);
+    fold.position.y = 0.08;
+    const brooch = new THREE.Mesh(new THREE.TorusGeometry(0.042, 0.012, 6, 12), goldMat);
+    brooch.rotation.x = Math.PI / 2;
+    brooch.position.set(0.06, 0.15, 0.08);
+    root.add(fold, brooch);
+    root.rotation.y = 0.4;
+
+  } else if (visualType === 'pelt') {
+    // Piel de lobo / bestia sagrada
+    const fur = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.16, 0.2), leatherMat);
+    fur.position.y = 0.08;
+    const snout = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.13, 6), leatherMat);
+    snout.rotation.x = Math.PI / 2;
+    snout.position.set(0, 0.1, 0.13);
+    root.add(fur, snout);
+    root.rotation.y = 0.35;
+
+  } else if (visualType === 'shield') {
+    // Gran Escudo Aspis Espartano
+    const shieldRim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.035, 16), goldMat);
+    shieldRim.rotation.x = Math.PI / 2 - 0.35;
+    const shieldCore = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.19, 0.19, 0.042, 16),
+      mat(rarityColor, { roughness: 0.35, metalness: 0.75, emissive: rarityEmissive, emissiveIntensity: rarityIntensity * 0.5 })
+    );
+    shieldCore.rotation.x = Math.PI / 2 - 0.35;
+    const boss = new THREE.Mesh(new THREE.OctahedronGeometry(0.062, 0), goldMat);
+    boss.position.set(0, 0.05, 0.02);
+    root.add(shieldRim, shieldCore, boss);
+
+  } else if (visualType === 'helm') {
+    // Yelmo Corintio con cresta griega (lophos)
+    const dome = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.14, 0.2, 10), bronzeMat);
+    dome.position.y = 0.08;
+    const crest = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.14, 0.3),
+      mat(rarityColor, { roughness: 0.55, emissive: rarityEmissive, emissiveIntensity: rarityIntensity * 0.6 })
+    );
+    crest.position.set(0, 0.24, 0);
+    root.add(dome, crest);
+    root.rotation.y = 0.45;
+
+  } else if (visualType === 'sandals') {
+    // Grebas / Sandalias con alas de Hermes
+    for (const sx of [-0.07, 0.07]) {
+      const boot = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.14), leatherMat);
+      boot.position.set(sx, 0.02, 0);
+      const wing = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.09, 4), goldMat);
+      wing.rotation.x = -Math.PI / 3;
+      wing.position.set(sx + (sx > 0 ? 0.04 : -0.04), 0.06, -0.05);
+      root.add(boot, wing);
+    }
+
+  } else if (visualType === 'mask') {
+    // Máscara sagrada de Licaón
+    const mask = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, 0.16), leatherMat);
+    mask.position.y = 0.07;
+    const snout = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.12, 6), leatherMat);
+    snout.rotation.x = Math.PI / 2;
+    snout.position.set(0, 0.08, 0.1);
+    const horns = [1, -1].map((side) => {
+      const h = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.14, 6), goldMat);
+      h.position.set(side * 0.1, 0.16, 0);
+      h.rotation.z = -side * 0.5;
+      return h;
+    });
+    root.add(mask, snout, ...horns);
+
+  } else {
+    // Amulet / Relic / Óbolo del Estigia
+    const medal = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.024, 16), goldMat);
+    medal.rotation.x = Math.PI / 2 - 0.3;
+    const rune = new THREE.Mesh(new THREE.OctahedronGeometry(0.055, 0), bladeMat);
+    rune.position.set(0, 0.03, 0.02);
+    root.add(medal, rune);
+  }
+
+  return root;
+}
+
+/**
+ * Construye el objeto 3D realista que se muestra en el suelo cuando un enemigo suelta botín.
+ * Sustituye los pequeños paralelepípedos genéricos por modelos 3D con forma, textura,
+ * haz vertical de luz según rareza y rotación suave.
+ */
+export function createGroundDropMesh3D(drop) {
+  const root = new THREE.Group();
+  root.name = `groundDrop-${drop.kind}-${drop.item?.id || Math.random().toString(36).slice(2, 6)}`;
+
+  // Disco de sombra difusa en el suelo
+  const shadowMesh = new THREE.Mesh(
+    new THREE.CircleGeometry(0.24, 16),
+    new THREE.MeshBasicMaterial({ color: 0x020617, transparent: true, opacity: 0.45 })
+  );
+  shadowMesh.rotation.x = -Math.PI / 2;
+  shadowMesh.position.y = 0.01;
+  root.add(shadowMesh);
+
+  // Grupo flotante articulado que oscila y gira
+  const bobGroup = new THREE.Group();
+  bobGroup.name = 'bobGroup';
+  root.add(bobGroup);
+
+  if (drop.kind === 'gold') {
+    // Pila de dracmas de oro griegas relucientes con destello estelar
+    const goldMat = mat(0xfacc15, { metalness: 0.92, roughness: 0.15, emissive: 0x854d0e, emissiveIntensity: 0.4 });
+    const coinGeo = new THREE.CylinderGeometry(0.065, 0.065, 0.018, 12);
+    const coinOffsets = [
+      { x: 0, y: 0.012, z: 0, rx: 0, rz: 0 },
+      { x: 0.055, y: 0.014, z: 0.03, rx: 0.08, rz: 0.12 },
+      { x: -0.05, y: 0.016, z: -0.04, rx: -0.1, rz: 0.06 },
+      { x: 0.025, y: 0.028, z: -0.02, rx: 0.05, rz: -0.15 },
+      { x: -0.03, y: 0.03, z: 0.035, rx: -0.08, rz: 0.1 },
+      { x: 0.01, y: 0.045, z: 0.01, rx: 0.04, rz: 0.03 },
+    ];
+    for (const c of coinOffsets) {
+      const coin = new THREE.Mesh(coinGeo, goldMat);
+      coin.position.set(c.x, c.y, c.z);
+      coin.rotation.set(c.rx, 0, c.rz);
+      bobGroup.add(coin);
+    }
+    // Destello de brillo dorado
+    const glint = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.038, 0),
+      mat(0xfef08a, { emissive: 0xfacc15, emissiveIntensity: 1.2 })
+    );
+    glint.position.set(0, 0.1, 0);
+    bobGroup.add(glint);
+
+    // Halo dorado en el suelo
+    const halo = new THREE.Mesh(
+      new THREE.RingGeometry(0.12, 0.28, 16),
+      new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.38, side: THREE.DoubleSide })
+    );
+    halo.rotation.x = -Math.PI / 2;
+    halo.position.y = 0.02;
+    root.add(halo);
+
+  } else if (drop.kind === 'potion') {
+    // Frasco griego de Ambrosía con líquido carmesí brillante y tapón de corcho
+    const bottle = new THREE.Group();
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.092, 12, 10),
+      mat(0xffffff, { transparent: true, opacity: 0.45, roughness: 0.1, metalness: 0.1 })
+    );
+    bulb.scale.set(1, 1.22, 1);
+    bulb.position.y = 0.11;
+
+    const liquid = new THREE.Mesh(
+      new THREE.SphereGeometry(0.076, 10, 8),
+      mat(0xef4444, { emissive: 0xdc2626, emissiveIntensity: 1.0, roughness: 0.2 })
+    );
+    liquid.scale.set(1, 1.15, 1);
+    liquid.position.y = 0.1;
+
+    const neck = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.035, 0.037, 0.08, 10),
+      mat(0xffffff, { transparent: true, opacity: 0.5, roughness: 0.1 })
+    );
+    neck.position.y = 0.215;
+
+    const cork = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.036, 0.028, 0.045, 8),
+      mat(0x78350f, { roughness: 0.85 })
+    );
+    cork.position.y = 0.265;
+
+    bottle.add(bulb, liquid, neck, cork);
+    bottle.rotation.z = 0.18;
+    bobGroup.add(bottle);
+
+    // Halo carmesí
+    const halo = new THREE.Mesh(
+      new THREE.RingGeometry(0.12, 0.28, 16),
+      new THREE.MeshBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.42, side: THREE.DoubleSide })
+    );
+    halo.rotation.x = -Math.PI / 2;
+    halo.position.y = 0.02;
+    root.add(halo);
+
+  } else {
+    // drop.kind === 'item'
+    const item = drop.item || {};
+    const visualType = getItemVisualType(item);
+    const rarity = item.rarity || 'common';
+    const rarityColor = rarity === 'unique' ? 0xf97316 : rarity === 'rare' ? 0xfacc15 : rarity === 'magic' ? 0x60a5fa : 0xd6d3d1;
+    const rarityEmissive = rarity === 'unique' ? 0xea580c : rarity === 'rare' ? 0xa16207 : rarity === 'magic' ? 0x0284c7 : 0x292524;
+    const rarityIntensity = rarity === 'unique' ? 1.0 : rarity === 'rare' ? 0.75 : rarity === 'magic' ? 0.55 : 0.15;
+
+    // Haz / Columna vertical de luz de rareza
+    const beamHeight = rarity === 'unique' ? 1.6 : rarity === 'rare' ? 1.3 : rarity === 'magic' ? 1.1 : 0.8;
+    const beamOpacity = rarity === 'unique' ? 0.48 : rarity === 'rare' ? 0.38 : rarity === 'magic' ? 0.28 : 0.14;
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.14, beamHeight, 8, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: rarityColor,
+        transparent: true,
+        opacity: beamOpacity,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    beam.position.y = beamHeight * 0.5;
+    root.add(beam);
+
+    // Anillo de rareza en el suelo
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.14, 0.28, 20),
+      new THREE.MeshBasicMaterial({
+        color: rarityColor,
+        transparent: true,
+        opacity: Math.min(0.85, beamOpacity * 2.2),
+        side: THREE.DoubleSide,
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.02;
+    root.add(ring);
+
+    // Modelo 3D específico
+    const itemModel = createItemVisualMesh3D(visualType, rarity, rarityColor, rarityEmissive, rarityIntensity);
+    itemModel.position.y = 0.14;
+    bobGroup.add(itemModel);
+  }
+
+  enableShadows(root, true, false);
+  return root;
+}
+
+/**
+ * Sincroniza visualmente las piezas de equipo activas en el modelo 3D del héroe:
+ *  - Arma en mano derecha (espada, lanza, bastón, arco, katar) con efectos de rareza.
+ *  - Escudo / flecha en mano izquierda.
+ *  - Armadura (coraza, manto, piel) en el torso y hombreras (spaulders).
+ *  - Reliquia / amuleto / yelmo / sandalias en cabeza, pies y auras.
+ */
+export function updateHeroEquipmentVisuals(heroMesh, equipment = {}, classId = 'hoplita') {
+  if (!heroMesh?.userData?.rig) return;
+  const rig = heroMesh.userData.rig;
+  const effectiveClassId = classId || rig.classId || 'hoplita';
+
+  const eq = equipment || {};
+  const weapon = eq.weapon || null;
+  const armor = eq.armor || null;
+  const charm = eq.charm || null;
+
+  const bronzeMat = mat(0xd99b43, { roughness: 0.3, metalness: 0.78 });
+  const goldMat = mat(0xfacc15, { roughness: 0.25, metalness: 0.85, emissive: 0x422006, emissiveIntensity: 0.25 });
+  const steelMat = mat(0xe2e8f0, { roughness: 0.22, metalness: 0.85 });
+  const leatherMat = mat(0x5c3a21, { roughness: 0.8, metalness: 0.1 });
+  const primaryMat = mat(HERO_CLASSES[effectiveClassId]?.color || 0xd99b43, { roughness: 0.45, metalness: 0.35 });
+
+  // 1. Limpiar slots articulados
+  if (rig.weaponSlot) {
+    while (rig.weaponSlot.children.length > 0) {
+      const c = rig.weaponSlot.children[0];
+      rig.weaponSlot.remove(c);
+      disposeObject3D(c);
+    }
+  }
+  if (rig.offhandSlot) {
+    while (rig.offhandSlot.children.length > 0) {
+      const c = rig.offhandSlot.children[0];
+      rig.offhandSlot.remove(c);
+      disposeObject3D(c);
+    }
+  }
+  if (rig.armorSlot) {
+    while (rig.armorSlot.children.length > 0) {
+      const c = rig.armorSlot.children[0];
+      rig.armorSlot.remove(c);
+      disposeObject3D(c);
+    }
+  }
+  if (rig.headgearSlot) {
+    while (rig.headgearSlot.children.length > 0) {
+      const c = rig.headgearSlot.children[0];
+      rig.headgearSlot.remove(c);
+      disposeObject3D(c);
+    }
+  }
+  if (rig.charmSlot) {
+    while (rig.charmSlot.children.length > 0) {
+      const c = rig.charmSlot.children[0];
+      rig.charmSlot.remove(c);
+      disposeObject3D(c);
+    }
+  }
+
+  // 2. Arma y Offhand
+  const weaponVisual = weapon ? getItemVisualType(weapon) : null;
+  const weaponRarity = weapon?.rarity || 'common';
+  const weaponColor = weaponRarity === 'unique' ? 0xf97316 : weaponRarity === 'rare' ? 0xfacc15 : weaponRarity === 'magic' ? 0x60a5fa : 0xd6d3d1;
+  const weaponEmissive = weaponRarity === 'unique' ? 0xea580c : weaponRarity === 'rare' ? 0xa16207 : weaponRarity === 'magic' ? 0x0284c7 : 0x000000;
+  const weaponIntensity = weaponRarity === 'unique' ? 1.0 : weaponRarity === 'rare' ? 0.75 : weaponRarity === 'magic' ? 0.55 : 0;
+  const weaponBladeMat = mat(weaponRarity === 'common' ? 0xe2e8f0 : weaponColor, {
+    metalness: 0.85,
+    roughness: 0.22,
+    emissive: weaponEmissive,
+    emissiveIntensity: weaponIntensity,
+  });
+
+  const charmVisual = charm ? getItemVisualType(charm) : null;
+  const isShieldEquipped = charmVisual === 'shield';
+
+  if (weaponVisual === 'bow' || (!weapon && effectiveClassId === 'arquera')) {
+    // Arco en la mano izquierda, flecha en la derecha
+    const bowGroup = new THREE.Group();
+    bowGroup.position.set(0, -0.2, 0.18);
+    const arc = new THREE.Mesh(
+      new THREE.TorusGeometry(0.26, 0.022, 6, 14, Math.PI * 1.15),
+      mat(weapon ? weaponColor : 0x86efac, { metalness: 0.7, roughness: 0.2, emissive: weapon ? weaponEmissive : 0x14532d, emissiveIntensity: 0.45 })
+    );
+    arc.rotation.z = -Math.PI * 0.57;
+    arc.rotation.y = Math.PI / 2;
+    const bowString = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.5, 4), steelMat);
+    bowString.position.z = -0.04;
+    bowGroup.add(arc, bowString);
+    rig.offhandSlot.add(bowGroup);
+
+    const arrow = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.012, 0.48, 5),
+      mat(weapon ? weaponColor : 0x4ade80, { emissive: weapon ? weaponEmissive : 0x22c55e, emissiveIntensity: 0.85 })
+    );
+    arrow.rotation.x = Math.PI / 2;
+    arrow.position.set(0, -0.2, 0.18);
+    rig.weaponSlot.add(arrow);
+
+    rig.defaultLeftArmX = -1.15;
+    rig.defaultRightArmX = -0.9;
+    rig.leftArmPivot.rotation.x = -1.15;
+    rig.rightArmPivot.rotation.x = -0.9;
+
+  } else if (weaponVisual === 'spear' || (!weapon && effectiveClassId === 'hoplita')) {
+    // Lanza Dory en la mano derecha
+    const spear = new THREE.Group();
+    spear.position.set(0.02, -0.22, 0.12);
+    spear.rotation.x = Math.PI / 2 - 0.22;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 1.05, 6), leatherMat);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.042, 0.22, 6), weapon ? weaponBladeMat : steelMat);
+    tip.position.y = 0.58;
+    const buttSpike = new THREE.Mesh(new THREE.ConeGeometry(0.028, 0.1, 6), bronzeMat);
+    buttSpike.position.y = -0.55;
+    buttSpike.rotation.x = Math.PI;
+    spear.add(shaft, tip, buttSpike);
+    rig.weaponSlot.add(spear);
+
+    rig.defaultRightArmX = -0.45;
+    rig.rightArmPivot.rotation.x = -0.45;
+
+  } else if (weaponVisual === 'staff' || (!weapon && effectiveClassId === 'oraculo')) {
+    // Bastón / Caduceo en la mano derecha
+    const staff = new THREE.Group();
+    staff.position.set(0, -0.2, 0.12);
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.018, 0.92, 6), goldMat);
+    rod.position.y = 0.18;
+    const crown = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.016, 6, 12), goldMat);
+    crown.position.y = 0.68;
+    const gem = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.065, 0),
+      mat(weapon ? weaponColor : 0x38bdf8, { emissive: weapon ? weaponEmissive : 0x0284c7, emissiveIntensity: 1.1 })
+    );
+    gem.position.y = 0.68;
+    staff.add(rod, crown, gem);
+    rig.weaponSlot.add(staff);
+
+    rig.defaultRightArmX = -0.35;
+    rig.rightArmPivot.rotation.x = -0.35;
+
+  } else if (weaponVisual === 'katar' || (!weapon && effectiveClassId === 'sombra')) {
+    // Katar en mano derecha
+    const katar = new THREE.Group();
+    katar.position.set(0, -0.24, 0.12);
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.1), bronzeMat);
+    const blade1 = new THREE.Mesh(
+      new THREE.ConeGeometry(0.025, 0.32, 4),
+      weapon ? weaponBladeMat : mat(0xf472b6, { emissive: 0xdb2777, emissiveIntensity: 0.8, metalness: 0.8 })
+    );
+    blade1.rotation.x = Math.PI / 2;
+    blade1.position.set(-0.022, 0, 0.18);
+    const blade2 = blade1.clone();
+    blade2.position.x = 0.022;
+    katar.add(guard, blade1, blade2);
+    rig.weaponSlot.add(katar);
+
+    rig.defaultRightArmX = -0.55;
+    rig.rightArmPivot.rotation.x = -0.55;
+
+  } else if (!weapon && effectiveClassId === 'necromante') {
+    // Guadaña ósea por defecto
+    const scythe = new THREE.Group();
+    scythe.position.set(0, -0.2, 0.12);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.018, 0.96, 6), mat(0xe2e8f0, { roughness: 0.45 }));
+    pole.position.y = 0.2;
+    const blade = new THREE.Mesh(
+      new THREE.ConeGeometry(0.065, 0.36, 5),
+      mat(0xc084fc, { emissive: 0x7e22ce, emissiveIntensity: 0.85, metalness: 0.6 })
+    );
+    blade.position.set(0, 0.64, 0.14);
+    blade.rotation.x = Math.PI / 2 + 0.25;
+    scythe.add(pole, blade);
+    rig.weaponSlot.add(scythe);
+    rig.defaultRightArmX = -0.35;
+    rig.rightArmPivot.rotation.x = -0.35;
+
+  } else if (!weapon && effectiveClassId === 'coribante') {
+    // Mazo telúrico por defecto
+    const maul = new THREE.Group();
+    maul.position.set(0, -0.22, 0.12);
+    maul.rotation.x = Math.PI / 2 - 0.35;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.022, 0.78, 6), leatherMat);
+    shaft.position.y = 0.18;
+    const headStone = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(0.14, 0),
+      mat(0x84cc16, { roughness: 0.5, emissive: 0x365314, emissiveIntensity: 0.55 })
+    );
+    headStone.position.y = 0.52;
+    maul.add(shaft, headStone);
+    rig.weaponSlot.add(maul);
+    rig.defaultRightArmX = -0.45;
+    rig.rightArmPivot.rotation.x = -0.45;
+
+  } else if (!weapon && effectiveClassId === 'campeon') {
+    // Hacha de guerra derecha
+    const axe = new THREE.Group();
+    axe.position.set(0, -0.23, 0.1);
+    axe.rotation.x = Math.PI / 2 - 0.3;
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.56, 6), leatherMat);
+    handle.position.y = 0.12;
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, 0.26), steelMat);
+    blade.position.set(0, 0.32, 0.04);
+    const trim = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.14, 0.12), primaryMat);
+    trim.position.set(0, 0.32, 0.0);
+    axe.add(handle, blade, trim);
+    rig.weaponSlot.add(axe);
+    rig.defaultRightArmX = -0.55;
+    rig.rightArmPivot.rotation.x = -0.55;
+
+  } else {
+    // Espada Xiphos en la mano derecha
+    const sword = new THREE.Group();
+    sword.position.set(0.01, -0.22, 0.12);
+    sword.rotation.x = Math.PI / 2 - 0.22;
+    const hilt = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.14, 6), leatherMat);
+    hilt.position.y = -0.06;
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.024, 0.036), bronzeMat);
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.46, 0.016), weaponBladeMat);
+    blade.position.y = 0.23;
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.09, 4), weaponBladeMat);
+    tip.position.y = 0.5;
+    sword.add(hilt, guard, blade, tip);
+    rig.weaponSlot.add(sword);
+    rig.defaultRightArmX = -0.4;
+    rig.rightArmPivot.rotation.x = -0.4;
+  }
+
+  // 3. Offhand / Escudo / Segundo arma
+  if (weaponVisual !== 'bow' && (!weapon ? effectiveClassId !== 'arquera' : true)) {
+    if (isShieldEquipped || (!charm && effectiveClassId === 'hoplita')) {
+      // Escudo Aspis en mano izquierda
+      const charmRarity = charm?.rarity || 'common';
+      const shieldColor = charmRarity === 'unique' ? 0xf97316 : charmRarity === 'rare' ? 0xfacc15 : charmRarity === 'magic' ? 0x60a5fa : primaryMat.color.getHex();
+      const shieldGroup = new THREE.Group();
+      shieldGroup.position.set(-0.06, -0.18, 0.12);
+      const shieldRim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.035, 16), goldMat);
+      shieldRim.rotation.x = Math.PI / 2;
+      shieldRim.rotation.z = 0.35;
+      const shieldCore = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.19, 0.19, 0.042, 16),
+        mat(shieldColor, { roughness: 0.35, metalness: 0.75 })
+      );
+      shieldCore.rotation.x = Math.PI / 2;
+      shieldCore.rotation.z = 0.35;
+      const boss = new THREE.Mesh(new THREE.OctahedronGeometry(0.06, 0), goldMat);
+      boss.position.z = 0.03;
+      shieldGroup.add(shieldRim, shieldCore, boss);
+      rig.offhandSlot.add(shieldGroup);
+      rig.defaultLeftArmX = -0.45;
+      rig.leftArmPivot.rotation.x = -0.45;
+
+    } else if (!charm && effectiveClassId === 'campeon') {
+      // Segunda hacha para el campeón
+      const axe2 = new THREE.Group();
+      axe2.position.set(0, -0.23, 0.1);
+      axe2.rotation.x = Math.PI / 2 - 0.3;
+      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.56, 6), leatherMat);
+      handle.position.y = 0.12;
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, 0.26), steelMat);
+      blade.position.set(0, 0.32, 0.04);
+      const trim = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.14, 0.12), primaryMat);
+      trim.position.set(0, 0.32, 0.0);
+      axe2.add(handle, blade, trim);
+      rig.offhandSlot.add(axe2);
+      rig.defaultLeftArmX = -0.35;
+      rig.leftArmPivot.rotation.x = -0.35;
+
+    } else if (!charm && effectiveClassId === 'oraculo') {
+      // Orbe de Zeus en mano izquierda
+      const orb = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.065, 0),
+        mat(0x7dd3fc, { emissive: 0x38bdf8, emissiveIntensity: 1.0 })
+      );
+      orb.position.set(0, -0.24, 0.14);
+      rig.offhandSlot.add(orb);
+      rig.defaultLeftArmX = -0.65;
+      rig.leftArmPivot.rotation.x = -0.65;
+
+    } else if (!charm && effectiveClassId === 'necromante') {
+      // Linterna de Átropos en mano izquierda
+      const lantern = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.07, 0),
+        mat(0xa855f7, { emissive: 0x9333ea, emissiveIntensity: 1.1 })
+      );
+      lantern.position.set(0, -0.25, 0.12);
+      rig.offhandSlot.add(lantern);
+      rig.defaultLeftArmX = -0.6;
+      rig.leftArmPivot.rotation.x = -0.6;
+
+    } else if (weaponVisual === 'katar' || (!weapon && effectiveClassId === 'sombra')) {
+      // Katar gemelo en mano izquierda
+      const katar2 = new THREE.Group();
+      katar2.position.set(0, -0.24, 0.12);
+      const guard = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.1), bronzeMat);
+      const b1 = new THREE.Mesh(
+        new THREE.ConeGeometry(0.025, 0.32, 4),
+        weapon ? weaponBladeMat : mat(0xf472b6, { emissive: 0xdb2777, emissiveIntensity: 0.8, metalness: 0.8 })
+      );
+      b1.rotation.x = Math.PI / 2;
+      b1.position.set(-0.022, 0, 0.18);
+      const b2 = b1.clone();
+      b2.position.x = 0.022;
+      katar2.add(guard, b1, b2);
+      rig.offhandSlot.add(katar2);
+      rig.defaultLeftArmX = -0.55;
+      rig.leftArmPivot.rotation.x = -0.55;
+    } else {
+      rig.defaultLeftArmX = -0.2;
+      rig.leftArmPivot.rotation.x = -0.2;
+    }
+  }
+
+  // 4. Reliquia / Encanto (Charm) no-escudo
+  if (charm && !isShieldEquipped) {
+    if (charmVisual === 'helm') {
+      const helmMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.138, 0.142, 0.22, 10), goldMat);
+      helmMesh.position.y = 0.12;
+      const crest = new THREE.Mesh(
+        new THREE.BoxGeometry(0.055, 0.15, 0.32),
+        mat(0xdc2626, { roughness: 0.6, emissive: 0x7f1d1d, emissiveIntensity: 0.4 })
+      );
+      crest.position.set(0, 0.3, -0.02);
+      rig.headgearSlot.add(helmMesh, crest);
+
+    } else if (charmVisual === 'sandals') {
+      for (const pivot of [rig.leftLegPivot, rig.rightLegPivot]) {
+        if (!pivot) continue;
+        const wing = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.11, 4), goldMat);
+        wing.rotation.x = -Math.PI / 3;
+        wing.position.set(0.05, -0.27, -0.04);
+        rig.charmSlot.add(wing);
+      }
+
+    } else if (charmVisual === 'mask') {
+      const snout = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.14, 6), leatherMat);
+      snout.rotation.x = Math.PI / 2;
+      snout.position.set(0, 0.2, 0.16);
+      rig.headgearSlot.add(snout);
+
+    } else {
+      // Amuleto u Óbolo flotante
+      const talisman = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.05, 0),
+        mat(0xfacc15, { emissive: 0xf59e0b, emissiveIntensity: 1.1 })
+      );
+      talisman.position.set(0.24, 0.72, 0.1);
+      rig.charmSlot.add(talisman);
+    }
+  }
+
+  // 5. Armadura (Torso, Hombreras / Spaulders, y Capa)
+  if (armor) {
+    const armorVisual = getItemVisualType(armor);
+    const armorRarity = armor.rarity || 'common';
+    const isBroad = effectiveClassId === 'campeon' || effectiveClassId === 'hoplita' || effectiveClassId === 'coribante';
+    const chestW = isBroad ? 0.3 : 0.24;
+
+    if (armorVisual === 'chlamys') {
+      if (rig.capeMesh?.material) {
+        rig.capeMesh.material.color.set(armorRarity === 'unique' ? 0x7e22ce : 0x991b1b);
+      }
+      if (rig.skirt?.material) {
+        rig.skirt.material.color.set(armorRarity === 'unique' ? 0x581c87 : 0x7f1d1d);
+      }
+
+    } else if (armorVisual === 'pelt') {
+      const mantle = new THREE.Mesh(new THREE.BoxGeometry(chestW * 1.1, 0.12, 0.22), leatherMat);
+      mantle.position.set(0, 0.32, 0);
+      rig.armorSlot.add(mantle);
+
+    } else {
+      // Cuirass / Coraza Hoplita / Égida
+      const armorColor =
+        armorRarity === 'unique'
+          ? 0xffffff
+          : armorRarity === 'rare'
+          ? 0xfacc15
+          : armorRarity === 'magic'
+          ? 0x3b82f6
+          : 0xd99b43;
+      const armorEmissive =
+        armorRarity === 'unique'
+          ? 0xf97316
+          : armorRarity === 'rare'
+          ? 0x854d0e
+          : armorRarity === 'magic'
+          ? 0x1d4ed8
+          : 0x000000;
+      const armorIntensity =
+        armorRarity === 'unique' ? 0.45 : armorRarity === 'rare' ? 0.35 : armorRarity === 'magic' ? 0.3 : 0;
+
+      if (rig.torsoMesh?.material) {
+        rig.torsoMesh.material.color.set(armorColor);
+        rig.torsoMesh.material.emissive.set(armorEmissive);
+        rig.torsoMesh.material.emissiveIntensity = armorIntensity;
+        rig.torsoMesh.material.metalness = armorRarity === 'common' ? 0.75 : 0.9;
+        rig.torsoMesh.material.roughness = armorRarity === 'unique' ? 0.18 : 0.25;
+      }
+
+      // Hombreras de combate (Spaulders)
+      for (const side of [-1, 1]) {
+        const pauldron = new THREE.Mesh(
+          new THREE.BoxGeometry(0.11, 0.055, 0.14),
+          mat(armorColor, { metalness: 0.88, roughness: 0.25, emissive: armorEmissive, emissiveIntensity: armorIntensity })
+        );
+        pauldron.position.set(side * (chestW * 0.5 + 0.04), 0.33, 0);
+        rig.armorSlot.add(pauldron);
+      }
+    }
+  } else {
+    // Restaurar material de torso y capa por defecto de la clase
+    if (rig.torsoMesh?.material) {
+      const defColor = effectiveClassId === 'hoplita' ? 0xd99b43 : effectiveClassId === 'campeon' ? 0xeab68c : HERO_CLASSES[effectiveClassId]?.color || 0xd99b43;
+      rig.torsoMesh.material.color.set(defColor);
+      rig.torsoMesh.material.emissive.set(0x000000);
+      rig.torsoMesh.material.emissiveIntensity = 0;
+    }
+  }
 }
 
 /**
@@ -302,157 +1079,26 @@ export function createHeroMesh3D(classId = 'hoplita') {
     pivot.add(arm, bracer);
   }
 
-  // Equipamiento de manos (Armas y Escudos 3D según la clase)
-  if (classId === 'hoplita') {
-    // Mano izquierda: Gran Escudo Aspis Espartano (bronce y borde dorado)
-    const shieldGroup = new THREE.Group();
-    shieldGroup.position.set(-0.06, -0.18, 0.12);
-    const shieldRim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.035, 16), goldMat);
-    shieldRim.rotation.x = Math.PI / 2;
-    shieldRim.rotation.z = 0.35;
-    const shieldCore = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.042, 16), primaryMat);
-    shieldCore.rotation.x = Math.PI / 2;
-    shieldCore.rotation.z = 0.35;
-    const boss = new THREE.Mesh(new THREE.OctahedronGeometry(0.06, 0), goldMat);
-    boss.position.z = 0.03;
-    shieldGroup.add(shieldRim, shieldCore, boss);
-    leftArmPivot.add(shieldGroup);
-    leftArmPivot.rotation.x = -0.45;
+  // Slots modulares para equipamiento visual en el modelo 3D
+  const offhandSlot = new THREE.Group();
+  offhandSlot.name = 'offhandSlot';
+  leftArmPivot.add(offhandSlot);
 
-    // Mano derecha: Lanza Dory espartana
-    const spear = new THREE.Group();
-    spear.position.set(0.02, -0.22, 0.12);
-    spear.rotation.x = Math.PI / 2 - 0.22;
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 1.05, 6), leatherMat);
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.042, 0.22, 6), steelMat);
-    tip.position.y = 0.58;
-    const buttSpike = new THREE.Mesh(new THREE.ConeGeometry(0.028, 0.1, 6), bronzeMat);
-    buttSpike.position.y = -0.55;
-    buttSpike.rotation.x = Math.PI;
-    spear.add(shaft, tip, buttSpike);
-    rightArmPivot.add(spear);
-  } else if (classId === 'campeon') {
-    // Doble hacha de guerra tracia (una en cada mano)
-    for (const [idx, pivot] of [leftArmPivot, rightArmPivot].entries()) {
-      const axe = new THREE.Group();
-      axe.position.set(0, -0.23, 0.1);
-      axe.rotation.x = Math.PI / 2 - 0.3;
-      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.56, 6), leatherMat);
-      handle.position.y = 0.12;
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, 0.26), steelMat);
-      blade.position.set(0, 0.32, 0.04);
-      const trim = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.14, 0.12), primaryMat);
-      trim.position.set(0, 0.32, 0.0);
-      axe.add(handle, blade, trim);
-      pivot.add(axe);
-      pivot.rotation.x = idx === 0 ? -0.35 : -0.55;
-    }
-  } else if (classId === 'arquera') {
-    // Arco Lunar curvo en la mano izquierda y flecha brillante en la derecha
-    const bowGroup = new THREE.Group();
-    bowGroup.position.set(0, -0.2, 0.18);
-    const arc = new THREE.Mesh(
-      new THREE.TorusGeometry(0.26, 0.022, 6, 14, Math.PI * 1.15),
-      mat(0x86efac, { metalness: 0.7, roughness: 0.2, emissive: 0x14532d, emissiveIntensity: 0.4 })
-    );
-    arc.rotation.z = -Math.PI * 0.57;
-    arc.rotation.y = Math.PI / 2;
-    const bowString = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.5, 4), steelMat);
-    bowString.position.z = -0.04;
-    bowGroup.add(arc, bowString);
-    leftArmPivot.add(bowGroup);
-    leftArmPivot.rotation.x = -1.15;
+  const weaponSlot = new THREE.Group();
+  weaponSlot.name = 'weaponSlot';
+  rightArmPivot.add(weaponSlot);
 
-    const arrow = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.012, 0.012, 0.48, 5),
-      mat(0x4ade80, { emissive: 0x22c55e, emissiveIntensity: 0.85 })
-    );
-    arrow.rotation.x = Math.PI / 2;
-    arrow.position.set(0, -0.2, 0.18);
-    rightArmPivot.add(arrow);
-    rightArmPivot.rotation.x = -0.9;
-  } else if (classId === 'oraculo') {
-    // Bastón de Delfos con cristal flotante + Orbe de Zeus en la otra mano
-    const staff = new THREE.Group();
-    staff.position.set(0, -0.2, 0.12);
-    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.018, 0.92, 6), goldMat);
-    rod.position.y = 0.18;
-    const crown = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.016, 6, 12), goldMat);
-    crown.position.y = 0.68;
-    const gem = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.065, 0),
-      mat(0x38bdf8, { emissive: 0x0284c7, emissiveIntensity: 1.1 })
-    );
-    gem.position.y = 0.68;
-    staff.add(rod, crown, gem);
-    rightArmPivot.add(staff);
-    rightArmPivot.rotation.x = -0.35;
+  const armorSlot = new THREE.Group();
+  armorSlot.name = 'armorSlot';
+  torsoPivot.add(armorSlot);
 
-    const orb = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.065, 0),
-      mat(0x7dd3fc, { emissive: 0x38bdf8, emissiveIntensity: 1.0 })
-    );
-    orb.position.set(0, -0.24, 0.14);
-    leftArmPivot.add(orb);
-    leftArmPivot.rotation.x = -0.65;
-  } else if (classId === 'necromante') {
-    // Guadaña Ósea del Estigia + Linterna de Átropos
-    const scythe = new THREE.Group();
-    scythe.position.set(0, -0.2, 0.12);
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.018, 0.96, 6), mat(0xe2e8f0, { roughness: 0.45 }));
-    pole.position.y = 0.2;
-    const blade = new THREE.Mesh(
-      new THREE.ConeGeometry(0.065, 0.36, 5),
-      mat(0xc084fc, { emissive: 0x7e22ce, emissiveIntensity: 0.85, metalness: 0.6 })
-    );
-    blade.position.set(0, 0.64, 0.14);
-    blade.rotation.x = Math.PI / 2 + 0.25;
-    scythe.add(pole, blade);
-    rightArmPivot.add(scythe);
-    rightArmPivot.rotation.x = -0.35;
+  const headgearSlot = new THREE.Group();
+  headgearSlot.name = 'headgearSlot';
+  headGroup.add(headgearSlot);
 
-    const lantern = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.07, 0),
-      mat(0xa855f7, { emissive: 0x9333ea, emissiveIntensity: 1.1 })
-    );
-    lantern.position.set(0, -0.25, 0.12);
-    leftArmPivot.add(lantern);
-    leftArmPivot.rotation.x = -0.6;
-  } else if (classId === 'sombra') {
-    // Garras Gemelas de las Erinias (Katars) en ambas manos
-    for (const pivot of [leftArmPivot, rightArmPivot]) {
-      const katar = new THREE.Group();
-      katar.position.set(0, -0.24, 0.12);
-      const guard = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.1), bronzeMat);
-      const blade1 = new THREE.Mesh(
-        new THREE.ConeGeometry(0.025, 0.32, 4),
-        mat(0xf472b6, { emissive: 0xdb2777, emissiveIntensity: 0.8, metalness: 0.8 })
-      );
-      blade1.rotation.x = Math.PI / 2;
-      blade1.position.set(-0.022, 0, 0.18);
-      const blade2 = blade1.clone();
-      blade2.position.x = 0.022;
-      katar.add(guard, blade1, blade2);
-      pivot.add(katar);
-      pivot.rotation.x = -0.55;
-    }
-  } else if (classId === 'coribante') {
-    // Gran Mazo Telúrico de Gea + Garras de Licaón
-    const maul = new THREE.Group();
-    maul.position.set(0, -0.22, 0.12);
-    maul.rotation.x = Math.PI / 2 - 0.35;
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.022, 0.78, 6), leatherMat);
-    shaft.position.y = 0.18;
-    const headStone = new THREE.Mesh(
-      new THREE.DodecahedronGeometry(0.14, 0),
-      mat(0x84cc16, { roughness: 0.5, emissive: 0x365314, emissiveIntensity: 0.55 })
-    );
-    headStone.position.y = 0.52;
-    maul.add(shaft, headStone);
-    rightArmPivot.add(maul);
-    rightArmPivot.rotation.x = -0.45;
-    leftArmPivot.rotation.x = -0.35;
-  }
+  const charmSlot = new THREE.Group();
+  charmSlot.name = 'charmSlot';
+  bodyGroup.add(charmSlot);
 
   enableShadows(root, true, true);
 
@@ -460,12 +1106,20 @@ export function createHeroMesh3D(classId = 'hoplita') {
     classId,
     bodyGroup,
     torsoPivot,
+    torsoMesh,
+    skirt,
+    capePivot,
+    capeMesh,
     headGroup,
+    headgearSlot,
+    armorSlot,
+    weaponSlot,
+    offhandSlot,
+    charmSlot,
     leftLegPivot,
     rightLegPivot,
     leftArmPivot,
     rightArmPivot,
-    capePivot,
     baseRing,
     shieldAura,
     furyAura,
@@ -477,6 +1131,9 @@ export function createHeroMesh3D(classId = 'hoplita') {
     hitFlashTimer: 0,
     facing: 0,
   };
+
+  // Montar equipo inicial icónico por defecto de la clase
+  updateHeroEquipmentVisuals(root, null, classId);
 
   return root;
 }
@@ -960,6 +1617,8 @@ export class ArchRenderer3D {
       this.heroClassId = null;
       this.enemyMeshes = new Map();
       this.dropMeshes = [];
+      this.dropMeshesMap = new Map();
+      this.lastEquippedKey = null;
       this.projMeshes = [];
       this.activeVFX = [];
       this.zoom = 1.0;
@@ -1012,6 +1671,15 @@ export class ArchRenderer3D {
     this.tileMeshes = [];
     this.shrineGroup = null;
     this.npcGroup = null;
+
+    if (this.dropMeshesMap) {
+      for (const [, m] of this.dropMeshesMap) {
+        this.fxGroup.remove(m);
+        disposeObject3D(m);
+      }
+      this.dropMeshesMap.clear();
+      this.dropMeshes = [];
+    }
 
     if (this.activeVFX) {
       for (const vfx of this.activeVFX) {
@@ -1842,11 +2510,23 @@ export class ArchRenderer3D {
 
     // 1. Asegurar que el modelo 3D del héroe coincide con la clase actual
     if (!this.heroMesh || this.heroClassId !== hero.classId) {
-      if (this.heroMesh) this.actorsGroup.remove(this.heroMesh);
+      if (this.heroMesh) {
+        this.actorsGroup.remove(this.heroMesh);
+        disposeObject3D(this.heroMesh);
+      }
       this.heroMesh = createHeroMesh3D(hero.classId);
       this.heroClassId = hero.classId;
       this.actorsGroup.add(this.heroMesh);
       this.lastHeroPos = { x: pos.x, y: pos.y };
+      this.lastEquippedKey = null;
+    }
+
+    // Sincronizar visualmente el equipamiento del héroe si ha cambiado
+    const eq = hero.equipment || {};
+    const eqKey = `${eq.weapon?.id || ''}:${eq.armor?.id || ''}:${eq.charm?.id || ''}`;
+    if (this.lastEquippedKey !== eqKey) {
+      this.lastEquippedKey = eqKey;
+      updateHeroEquipmentVisuals(this.heroMesh, eq, hero.classId);
     }
 
     // 2. Sincronizar cámara ortográfica con `game.cam` (proyección 2:1 idéntica a toIso)
@@ -1989,28 +2669,37 @@ export class ArchRenderer3D {
   }
 
   _syncGroundDrops(groundDrops, now) {
-    while (this.dropMeshes.length > groundDrops.length) {
-      const m = this.dropMeshes.pop();
-      this.fxGroup.remove(m);
-      disposeObject3D(m);
+    if (!this.dropMeshesMap) {
+      this.dropMeshesMap = new Map();
     }
-    while (this.dropMeshes.length < groundDrops.length) {
-      const m = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.11, 0),
-        mat(0xfacc15, { metalness: 0.8, roughness: 0.2, emissive: 0x78350f, emissiveIntensity: 0.5 })
-      );
-      this.fxGroup.add(m);
-      this.dropMeshes.push(m);
+    const activeDrops = new Set(groundDrops);
+
+    // Limpiar ítems que ya fueron recogidos
+    for (const [drop, mesh] of this.dropMeshesMap.entries()) {
+      if (!activeDrops.has(drop)) {
+        this.fxGroup.remove(mesh);
+        disposeObject3D(mesh);
+        this.dropMeshesMap.delete(drop);
+      }
     }
+
+    // Instanciar o actualizar cada botín activo en el suelo con sus modelos 3D y columna de luz
     for (let i = 0; i < groundDrops.length; i++) {
       const d = groundDrops[i];
-      const m = this.dropMeshes[i];
-      const color = d.kind === 'gold' ? 0xfacc15 : d.kind === 'potion' ? 0xef4444 : d.item?.color || 0x38bdf8;
-      m.material.color.set(color);
-      m.material.emissive.set(color);
-      m.position.set(d.x, 0.16 + Math.sin(now * 4 + i) * 0.04, d.y);
-      m.rotation.y = now * 2.5 + i;
+      let mesh = this.dropMeshesMap.get(d);
+      if (!mesh) {
+        mesh = createGroundDropMesh3D(d);
+        this.fxGroup.add(mesh);
+        this.dropMeshesMap.set(d, mesh);
+      }
+      mesh.position.set(d.x, 0, d.y);
+      const bob = mesh.getObjectByName('bobGroup');
+      if (bob) {
+        bob.position.y = 0.16 + Math.sin(now * 3.5 + i * 0.8) * 0.04;
+        bob.rotation.y = now * 1.8 + i * 0.6;
+      }
     }
+    this.dropMeshes = Array.from(this.dropMeshesMap.values());
   }
 
   _syncProjectiles(projectiles) {
@@ -2104,11 +2793,22 @@ export class HeroPreview3D {
     }
   }
 
-  setClass(classId) {
+  setClass(classId, equipment = null) {
     if (!this.enabled) return;
-    if (this.heroMesh) this.scene.remove(this.heroMesh);
+    if (this.heroMesh) {
+      this.scene.remove(this.heroMesh);
+      disposeObject3D(this.heroMesh);
+    }
     this.heroMesh = createHeroMesh3D(classId);
+    if (equipment) {
+      updateHeroEquipmentVisuals(this.heroMesh, equipment, classId);
+    }
     this.scene.add(this.heroMesh);
+  }
+
+  setEquipment(equipment, classId = null) {
+    if (!this.enabled || !this.heroMesh) return;
+    updateHeroEquipmentVisuals(this.heroMesh, equipment, classId || this.heroMesh.userData.rig?.classId);
   }
 
   _loop(ts) {
