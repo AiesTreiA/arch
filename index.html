@@ -254,7 +254,7 @@
 
         <section id="tabPanelQuests" role="tabpanel" aria-labelledby="tabBtnQuests" hidden>
           <div class="card">
-            <h3>Hazañas del Acto I (Oráculos)</h3>
+            <h3>Hazañas y Destino (Piso 22)</h3>
             <div id="questsBox"></div>
           </div>
           <div class="card">
@@ -269,7 +269,7 @@
             </div>
             <p class="controls-doc">
               <strong>Móvil horizontal:</strong> Joystick izquierdo para mover y apuntar · Botones derechos para atacar, lanzar [Q]/[E], beber Ambrosía e interactuar.<br />
-              <strong>PC:</strong> WASD / Flechas o Clic para mover · Espacio: atacar · Q/E: habilidades · 1: poción · F: Sibila/cofre/altar/bajar · I/C/K: abrir paneles · Rueda: zoom 3D.
+              <strong>PC:</strong> WASD / Flechas o Clic para mover · Espacio: atacar · Q/E: habilidades · 1: poción · F: Sibila/cofre/altar/bajar/subir · I/C/K: abrir paneles · Rueda: zoom 3D.
             </p>
           </div>
           <div class="card">
@@ -286,10 +286,10 @@
     <div class="modal-box">
       <div class="start-header">
         <h2 id="startTitle">🔥 La Hoguera del Aqueronte — Selección de Héroe 3D</h2>
-        <span class="start-act-tag">Acto I: El Umbral del Estigia</span>
+        <span class="start-act-tag">De la Tierra al Piso 22</span>
       </div>
       <p class="start-intro">
-        Siete juramentos convergen frente a la barca de Caronte. Elige tu arquetipo griego en 3D, recibe tu reliquia de iniciado y habla con la <strong>Sibila de Cumas [F]</strong>.
+        Siete juramentos convergen en la Ribera del Aqueronte. Explora Grecia en la superficie, cruza el Inframundo y derrota a <strong>Hades en el Piso 22</strong>.
       </p>
 
       <div class="class-grid" id="classGrid"></div>
@@ -308,7 +308,7 @@
         </div>
         <div class="start-cta-group">
           <button id="btnCancelStart" type="button" hidden>Volver</button>
-          <button id="btnStart" type="button">Iniciar Acto I</button>
+          <button id="btnStart" type="button">Iniciar Gesta</button>
           <button id="btnStartFullscreen" type="button" class="primary">⛶ Jugar en Pantalla Completa</button>
         </div>
       </div>
@@ -323,6 +323,18 @@
       <div class="start-cta-group">
         <button id="btnGameOverBonfire" type="button">🔥 Elegir otro Héroe</button>
         <button id="btnGameOverRetry" type="button" class="primary">↺ Reintentar descenso</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Diálogo de Victoria Final (Piso 22 · Hades Derrotado) -->
+  <dialog id="victoryModal" class="gameover-dialog victory-dialog" aria-labelledby="victoryTitle">
+    <div class="modal-box victory-box">
+      <h2 id="victoryTitle">👑 ¡Victoria sobre Hades en el Piso 22!</h2>
+      <p id="victorySummary" class="start-intro"></p>
+      <div class="start-cta-group">
+        <button id="btnVictoryBonfire" type="button">🔥 Nueva Gesta</button>
+        <button id="btnVictoryEndless" type="button" class="primary">🌌 Seguir al Abismo Infinito</button>
       </div>
     </div>
   </dialog>

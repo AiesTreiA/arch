@@ -3,10 +3,14 @@
  * Integra generación procedural, niebla de guerra, IA de enemigos, combate, habilidades y botín.
  */
 import {
+  FINAL_FLOOR,
   generateDungeon,
+  getZoneAt,
   isWalkable,
+  TILE_FLOOR,
   TILE_SHRINE,
   TILE_STAIRS,
+  TILE_STAIRS_UP,
   TILE_WALL,
   updateVisibility,
 } from '../core/dungeon.js';
@@ -62,6 +66,10 @@ export class ArchGame {
     this.floor = 1;
     this.running = false;
     this.gameOver = false;
+    this.finalBossDefeated = false;
+    this.endlessUnlocked = false;
+    this.currentZoneId = null;
+    this.discoveredZones = new Set();
     this.lastTs = 0;
     this.lastDt = 0.016;
     this.attackCdLeft = 0;
@@ -79,6 +87,7 @@ export class ArchGame {
     this.pos = { x: 4, y: 4 };
     this.cam = { x: 0, y: 0 };
     this.dungeon = null;
+    this.floorCache = new Map();
 
     this.renderer3d = new ArchRenderer3D(this.canvas);
     this.renderer3d.setZoom(this.zoom);
@@ -107,25 +116,29 @@ export class ArchGame {
 
     window.addEventListener('keydown', (e) => {
       if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
-      const k = e.key.toLowerCase();
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = (e.key || '').toLowerCase();
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) {
-        if (this.running) e.preventDefault();
+        if (this.running) e.preventDefault?.();
       }
       this.keys.add(k);
       if (!this.running || this.gameOver) return;
       if (k === 'q') this.castSkill('q');
       else if (k === 'e') this.castSkill('e');
       else if (k === '1' || k === 'r') this.usePotion();
-      else if (k === ' ') {
+      else if (k === 'f') {
+        e.preventDefault?.();
+        if (!e.repeat) this.interactNearby();
+      } else if (k === ' ') {
         if (this.attackCdLeft <= 0) {
-          this.basicAttackNearest({ allowInteract: true });
+          this.basicAttackNearest({ allowInteract: !e.repeat });
         } else {
           this.attackQueued = true;
           this.attackBufferTimer = 0.28;
         }
       }
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
+    window.addEventListener('keyup', (e) => this.keys.delete((e.key || '').toLowerCase()));
     window.addEventListener('blur', () => {
       this.keys.clear();
       this.joystick.x = 0;
@@ -158,7 +171,7 @@ export class ArchGame {
       // ¿Clic sobre la Sibila del Campamento?
       if (this.dungeon?.npc && Math.hypot(this.dungeon.npc.x - g.x, this.dungeon.npc.y - g.y) < 1.1) {
         if (Math.hypot(this.dungeon.npc.x - this.pos.x, this.dungeon.npc.y - this.pos.y) <= 2.2) {
-          this.interactNearby();
+          this._interactWithNpc(this.dungeon.npc);
         } else {
           this.moveTarget = { x: this.dungeon.npc.x, y: this.dungeon.npc.y };
         }
@@ -248,10 +261,17 @@ export class ArchGame {
   startNewGame({ classId = 'hoplita', heroName = '', seed = 'olimpia-01' } = {}) {
     this.seed = (seed || 'olimpia-01').trim();
     this.floor = 1;
+    this.dungeon = null;
+    this.floorCache = new Map();
     this.hero = createHero(classId, heroName);
     const derived = computeHeroDerived(this.hero);
     this.hero.hp = derived.maxHp;
     this.hero.mana = derived.maxMana;
+    this.gameOver = false;
+    this.finalBossDefeated = false;
+    this.endlessUnlocked = false;
+    this.currentZoneId = null;
+    this.discoveredZones = new Set();
     this.attackCdLeft = 0;
     this.attackQueued = false;
     this.attackBufferTimer = 0;
@@ -263,8 +283,8 @@ export class ArchGame {
     this.joystick = { x: 0, y: 0 };
     this.lastAimDir = { x: 1, y: 0 };
     this.log = [];
-    this._loadFloor(1);
-    this.addLog(`Sibila de Cumas: «Bienvenido al Aqueronte, ${this.hero.className}. Purga el Antro [F]».`);
+    this._loadFloor(1, { entry: 'spawn', savePrevious: false });
+    this.addLog(`Sibila de Cumas: «Bienvenido a la Hélade, ${this.hero.className}. Cruza Arcadia y Delfos hasta las Fauces del Tártaro».`);
     this.addLog(this.hero.prologue);
     if (!this.running) {
       this.running = true;
@@ -274,22 +294,80 @@ export class ArchGame {
     this._notify();
   }
 
-  _loadFloor(floor) {
+  /** Elige una casilla caminable adyacente al portal/escalera para aparecer sin solaparse con el arco 3D ni el NPC. */
+  _findEntryPosNear(anchor, preferredOffsets = [[0, 1], [1, 0], [-1, 0], [0, -1]]) {
+    if (!anchor || !this.dungeon) return { ...(this.dungeon?.spawn || { x: 4, y: 4 }) };
+    const fallbackOffsets = [[0, 1], [1, 0], [-1, 0], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
+    const seen = new Set();
+    for (const [dx, dy] of [...preferredOffsets, ...fallbackOffsets]) {
+      const key = `${dx},${dy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const tx = anchor.x + dx;
+      const ty = anchor.y + dy;
+      if (ty < 0 || ty >= this.dungeon.height || tx < 0 || tx >= this.dungeon.width) continue;
+      if (this.dungeon.grid[ty]?.[tx] !== TILE_FLOOR) continue;
+      if (
+        this.dungeon.npc &&
+        Math.hypot(this.dungeon.npc.x - (tx + 0.5), this.dungeon.npc.y - (ty + 0.5)) < 0.7
+      ) {
+        continue;
+      }
+      return { x: tx + 0.5, y: ty + 0.5 };
+    }
+    return { x: anchor.x + 0.5, y: anchor.y + 0.5 };
+  }
+
+  _loadFloor(floor, { entry = 'spawn', savePrevious = true } = {}) {
+    if (savePrevious && this.dungeon && this.floor != null) {
+      this.floorCache?.set(this.floor, {
+        dungeon: this.dungeon,
+        enemies: this.enemies,
+        groundDrops: this.groundDrops,
+      });
+    }
+
     this.floor = floor;
-    this.dungeon = generateDungeon({ width: 44, height: 44, level: floor, seed: this.seed });
-    this.pos = { ...this.dungeon.spawn };
+    const cached = this.floorCache?.get(floor);
+    if (cached) {
+      this.dungeon = cached.dungeon;
+      this.enemies = cached.enemies;
+      this.groundDrops = cached.groundDrops;
+    } else {
+      const size = floor === 1 ? 48 : 44;
+      this.dungeon = generateDungeon({ width: size, height: size, level: floor, seed: this.seed });
+      this.groundDrops = [];
+      this.enemies = this.dungeon.enemySpawns.map((s, idx) => createEnemy(s, `e-${floor}-${idx}`));
+    }
+
+    if (entry === 'stairsUp' && this.dungeon.stairsUp) {
+      this.pos = this._findEntryPosNear(this.dungeon.stairsUp, [[1, 0], [0, 1], [0, -1], [-1, 0]]);
+    } else if (entry === 'stairsDown' && this.dungeon.stairs) {
+      this.pos = this._findEntryPosNear(this.dungeon.stairs, [[0, 1], [-1, 0], [1, 0], [0, -1]]);
+    } else {
+      this.pos = { ...this.dungeon.spawn };
+    }
+
     this.projectiles = [];
     this.floaters = [];
-    this.groundDrops = [];
     this.moveTarget = null;
     this.attackTargetId = null;
-    this.enemies = this.dungeon.enemySpawns.map((s, idx) => createEnemy(s, `e-${floor}-${idx}`));
-    updateVisibility(this.dungeon, this.pos.x, this.pos.y, 8);
+    this.attackQueued = false;
+    this.attackBufferTimer = 0;
+
+    updateVisibility(this.dungeon, this.pos.x, this.pos.y, floor === 1 ? 11 : 8);
+    const startZone = getZoneAt(this.dungeon, this.pos.x, this.pos.y);
+    this.currentZoneId = startZone?.id || null;
+    if (startZone) this.discoveredZones.add(startZone.id);
     const iso = toIso(this.pos.x, this.pos.y);
     this.cam.x = iso.x;
     this.cam.y = iso.y;
     this.renderer3d?.buildDungeon(this.dungeon);
-    this.addLog(`Acto I · Piso ${floor}: ${this.dungeon.biome.name}.`);
+    const prefix = floor === 1 ? 'Superficie' : floor <= FINAL_FLOOR ? `Piso ${floor}/${FINAL_FLOOR}` : `Abismo ${floor}`;
+    this.addLog(`${prefix}: ${this.dungeon.biome.name}.`);
+    if (!cached && floor === FINAL_FLOOR && !this.finalBossDefeated) {
+      this.addLog('¡Has alcanzado el Trono del Tártaro! Derrota a Hades, Soberano de los Muertos.');
+    }
   }
 
   addLog(msg) {
@@ -521,12 +599,59 @@ export class ArchGame {
 
     const tx = Math.floor(this.pos.x);
     const ty = Math.floor(this.pos.y);
-    const onStairs = this.dungeon.grid[ty]?.[tx] === TILE_STAIRS;
-    const nearStairs =
-      this.dungeon.stairs &&
-      Math.hypot(this.dungeon.stairs.x + 0.5 - this.pos.x, this.dungeon.stairs.y + 0.5 - this.pos.y) <= 1.35;
-    if (onStairs || nearStairs) {
-      return { kind: 'stairs', label: `Piso ${this.floor + 1}`, hint: `Descender al Piso ${this.floor + 1}`, target: this.dungeon.stairs };
+    const curTile = this.dungeon.grid[ty]?.[tx];
+    const distDown = this.dungeon.stairs
+      ? Math.hypot(this.dungeon.stairs.x + 0.5 - this.pos.x, this.dungeon.stairs.y + 0.5 - this.pos.y)
+      : Infinity;
+    const distUp = this.dungeon.stairsUp
+      ? Math.hypot(this.dungeon.stairsUp.x + 0.5 - this.pos.x, this.dungeon.stairsUp.y + 0.5 - this.pos.y)
+      : Infinity;
+    const canDown = Boolean(this.dungeon.stairs) && (curTile === TILE_STAIRS || distDown <= 1.35);
+    const canUp = this.floor > 1 && Boolean(this.dungeon.stairsUp) && (curTile === TILE_STAIRS_UP || distUp <= 1.35);
+
+    if (canDown || canUp) {
+      const preferUp =
+        canUp && (!canDown || curTile === TILE_STAIRS_UP || (curTile !== TILE_STAIRS && distUp < distDown));
+      if (preferUp) {
+        const prevFloor = this.floor - 1;
+        return {
+          kind: 'stairsUp',
+          label: prevFloor === 1 ? '▲ Tierra 1' : `▲ Piso ${prevFloor}`,
+          hint: prevFloor === 1 ? 'Subir a la Superficie (Tierra 1)' : `Subir al Piso ${prevFloor}`,
+          target: this.dungeon.stairsUp,
+        };
+      }
+      if (this.floor === FINAL_FLOOR && !this.finalBossDefeated) {
+        return {
+          kind: 'stairs',
+          locked: true,
+          label: 'Sellado',
+          hint: 'Derrota a Hades antes de continuar',
+          target: this.dungeon.stairs,
+        };
+      }
+      if (this.floor === 1) {
+        return {
+          kind: 'stairs',
+          label: 'Inframundo',
+          hint: 'Entrar al Inframundo (Piso 2)',
+          target: this.dungeon.stairs,
+        };
+      }
+      if (this.floor === FINAL_FLOOR && this.finalBossDefeated) {
+        return {
+          kind: 'stairs',
+          label: 'Abismo 23',
+          hint: 'Entrar al Modo Abismo Infinito (Piso 23)',
+          target: this.dungeon.stairs,
+        };
+      }
+      return {
+        kind: 'stairs',
+        label: `▼ Piso ${this.floor + 1}`,
+        hint: `Descender al Piso ${this.floor + 1}`,
+        target: this.dungeon.stairs,
+      };
     }
 
     if (this.dungeon.npc) {
@@ -537,6 +662,46 @@ export class ArchGame {
     }
 
     return null;
+  }
+
+  _interactWithNpc(npc = this.dungeon?.npc) {
+    if (!npc) return false;
+    npc.talked = true;
+    const derived = computeHeroDerived(this.hero);
+    this.hero.hp = derived.maxHp;
+    this.hero.mana = derived.maxMana;
+    const pending = this.hero.quests.find((q) => !q.completed);
+    const quote = pending
+      ? `${pending.desc} (${pending.progress}/${pending.targetCount})`
+      : 'Has cumplido los 3 Oráculos del Estigia, héroe inmortal.';
+    this.addLog(`${npc.name}: «${quote}».`);
+    const label = this.dungeon?.isOverworld ? 'Oráculo de la Sibila' : npc.name;
+    this.addFloater(npc.x, npc.y, `${label} (Salud restaurada)`, '#facc15');
+    this.onEvent?.({
+      type: 'oracle',
+      title: npc.name,
+      message: `${quote} (Salud y fervor restaurados)`,
+    });
+    this._notify();
+    return true;
+  }
+
+  _changeFloor(targetFloor, entry, logMessage) {
+    this.addLog(logMessage);
+    this._loadFloor(targetFloor, { entry });
+    const title =
+      this.floor === 1
+        ? `Tierra 1/${FINAL_FLOOR}`
+        : this.floor <= FINAL_FLOOR
+        ? `Piso ${this.floor}/${FINAL_FLOOR}`
+        : `Abismo · Piso ${this.floor}`;
+    this.onEvent?.({
+      type: 'floor',
+      title,
+      message: this.dungeon?.biome?.name || (entry === 'stairsDown' ? 'Ascenso' : 'Nuevo descenso'),
+    });
+    this._notify();
+    return true;
   }
 
   interactNearby() {
@@ -572,36 +737,26 @@ export class ArchGame {
       return true;
     }
 
+    if (near.kind === 'stairsUp') {
+      if (this.floor <= 1) return false;
+      const targetFloor = this.floor - 1;
+      const msg =
+        targetFloor === 1 ? 'Subes a la Superficie (Hélade)...' : `Subes al piso ${targetFloor}...`;
+      return this._changeFloor(targetFloor, 'stairsDown', msg);
+    }
+
     if (near.kind === 'stairs') {
-      this.addLog(`Desciendes al piso ${this.floor + 1}...`);
-      this._loadFloor(this.floor + 1);
-      this.onEvent?.({
-        type: 'floor',
-        title: `Piso ${this.floor}`,
-        message: this.dungeon?.biome?.name || 'Nuevo descenso',
-      });
-      this._notify();
-      return true;
+      if (near.locked) {
+        this.addFloater(this.pos.x, this.pos.y, '¡Derrota a Hades primero!', '#f97316');
+        this.addLog('El portal del Tártaro está sellado mientras Hades viva en el Piso 22.');
+        return false;
+      }
+      const targetFloor = this.floor + 1;
+      return this._changeFloor(targetFloor, 'stairsUp', `Desciendes al piso ${targetFloor}...`);
     }
 
     if (near.kind === 'npc') {
-      this.dungeon.npc.talked = true;
-      const derived = computeHeroDerived(this.hero);
-      this.hero.hp = derived.maxHp;
-      this.hero.mana = derived.maxMana;
-      const pending = this.hero.quests.find((q) => !q.completed);
-      const quote = pending
-        ? `${pending.desc} (${pending.progress}/${pending.targetCount})`
-        : 'Has cumplido los 3 Oráculos del Estigia, héroe inmortal.';
-      this.addLog(`${this.dungeon.npc.name}: «${quote}».`);
-      this.addFloater(this.dungeon.npc.x, this.dungeon.npc.y, 'Oráculo de la Sibila (Salud restaurada)', '#facc15');
-      this.onEvent?.({
-        type: 'oracle',
-        title: this.dungeon.npc.name,
-        message: `${quote} (Salud y fervor restaurados)`,
-      });
-      this._notify();
-      return true;
+      return this._interactWithNpc(near.target);
     }
 
     return false;
@@ -1112,8 +1267,6 @@ export class ArchGame {
     }
     this._notify();
   }
-    this._notify();
-  }
 
   _strikeEnemy(enemy, derived) {
     const res = resolveStrike({
@@ -1210,6 +1363,36 @@ export class ArchGame {
         x: enemy.x + (Math.random() - 0.5) * 0.5,
         y: enemy.y + (Math.random() - 0.5) * 0.5,
         ...d,
+      });
+    }
+
+    if (enemy.isFinalBoss || enemy.kind === 'hades') {
+      this.finalBossDefeated = true;
+      this.endlessUnlocked = true;
+      const royalRelic = generateItem({
+        level: this.floor + 2,
+        forceRarity: 'unique',
+        preferredClass: this.hero.classId,
+        seed: `${this.seed}:hades-victory:${this.hero.classId}`,
+      });
+      this.groundDrops.push({ x: enemy.x, y: enemy.y, kind: 'item', item: royalRelic });
+      this.groundDrops.push({ x: enemy.x + 0.35, y: enemy.y + 0.25, kind: 'gold', amount: 250 });
+      this.shakeScreen(0.95);
+      this.renderer3d?.triggerSkillVFX({
+        type: 'solar_nova',
+        x: enemy.x,
+        y: enemy.y,
+        damage: 180,
+        isCrit: true,
+        color: '#facc15',
+      });
+      this.addFloater(enemy.x, enemy.y, '¡HADES HA CAÍDO! VICTORIA', '#facc15');
+      this.addLog(`¡Triunfo Olímpico! Has derrotado a ${enemy.name} en el Piso ${this.floor}.`);
+      this.onEvent?.({
+        type: 'victory',
+        title: '¡Triunfo en el Tártaro!',
+        message: `Has derrotado a ${enemy.name} en el Piso ${this.floor} y conquistado el Inframundo.`,
+        floor: this.floor,
       });
     }
     this._notify();
@@ -1317,7 +1500,26 @@ export class ArchGame {
       const ny = this.pos.y + vy * dt;
       if (isWalkable(this.dungeon, nx, this.pos.y)) this.pos.x = nx;
       if (isWalkable(this.dungeon, this.pos.x, ny)) this.pos.y = ny;
-      updateVisibility(this.dungeon, this.pos.x, this.pos.y, 8);
+      updateVisibility(this.dungeon, this.pos.x, this.pos.y, this.dungeon.isOverworld ? 11 : 8);
+
+      if (this.dungeon.isOverworld) {
+        const zone = getZoneAt(this.dungeon, this.pos.x, this.pos.y);
+        const nextZid = zone?.id || null;
+        if (nextZid !== this.currentZoneId) {
+          this.currentZoneId = nextZid;
+          if (zone && !this.discoveredZones.has(zone.id)) {
+            this.discoveredZones.add(zone.id);
+            this.addLog(`Zona descubierta: ${zone.name} (${zone.subtitle}).`);
+            this.onEvent?.({
+              type: 'zone',
+              title: zone.name,
+              message: zone.subtitle,
+              color: zone.color,
+            });
+          }
+          this._notify();
+        }
+      }
     }
 
     // Recoger botín cercano automáticamente (oro/pociones) o ítems si hay espacio
@@ -1488,7 +1690,7 @@ export class ArchGame {
       this.renderer3d.render(this, this.lastDt || 0.016);
       ctx.clearRect(0, 0, this.viewW, this.viewH);
     } else {
-      ctx.fillStyle = '#090b10';
+      ctx.fillStyle = this.dungeon?.isOverworld ? '#0c2438' : '#090b10';
       ctx.fillRect(0, 0, this.viewW, this.viewH);
     }
     if (!this.dungeon) return;
@@ -1498,9 +1700,22 @@ export class ArchGame {
     ctx.scale(this.zoom, this.zoom);
     ctx.translate(-this.cam.x, -this.cam.y);
 
-    const { width, height, grid, explored, biome } = this.dungeon;
+    const { width, height, grid, explored, biome, isOverworld, terrain } = this.dungeon;
     const hw = TILE_W / 2;
     const hh = TILE_H / 2;
+    const overworldColors = {
+      grass: '#3d7d36',
+      meadow: '#52a346',
+      dirt: '#9c7248',
+      sand: '#e2c275',
+      water: '#0284c7',
+      shallow_water: '#38bdf8',
+      bridge: '#9a7b56',
+      marble: '#e2e8f0',
+      rock: '#57534e',
+      forest: '#2f632b',
+      cliff: '#6b5e50',
+    };
 
     // Pintar suelo (solo en fallback 2D) y etiquetas de hitos visibles
     for (let y = 0; y < height; y++) {
@@ -1508,13 +1723,14 @@ export class ArchGame {
         const vis = explored[y][x];
         if (vis === 0) continue;
         const t = grid[y][x];
+        const tKind = isOverworld ? terrain?.[y]?.[x] : null;
         const iso = toIso(x, y);
-        const alpha = vis === 2 ? 1 : 0.34;
+        const alpha = vis === 2 ? 1 : isOverworld ? 0.56 : 0.34;
         ctx.globalAlpha = alpha;
 
         if (!is3D) {
-          if (t === TILE_WALL) {
-            ctx.fillStyle = biome.wall;
+          if (t === TILE_WALL && (!isOverworld || tKind === 'cliff')) {
+            ctx.fillStyle = isOverworld ? '#6b5e50' : biome.wall;
             ctx.beginPath();
             ctx.moveTo(iso.x, iso.y - WALL_H);
             ctx.lineTo(iso.x + hw, iso.y + hh - WALL_H);
@@ -1532,7 +1748,16 @@ export class ArchGame {
             ctx.closePath();
             ctx.fill();
           } else {
-            ctx.fillStyle = t === TILE_STAIRS ? '#3b2e16' : t === TILE_SHRINE ? '#172d3d' : biome.floor;
+            ctx.fillStyle =
+              t === TILE_STAIRS
+                ? '#3b2e16'
+                : t === TILE_STAIRS_UP
+                ? '#16354d'
+                : t === TILE_SHRINE
+                ? '#172d3d'
+                : isOverworld
+                ? overworldColors[tKind] || biome.floor
+                : biome.floor;
             ctx.beginPath();
             ctx.moveTo(iso.x, iso.y);
             ctx.lineTo(iso.x + hw, iso.y + hh);
@@ -1546,10 +1771,24 @@ export class ArchGame {
         }
 
         if (t === TILE_STAIRS) {
-          ctx.fillStyle = '#facc15';
+          const isSealedFinal = this.floor === FINAL_FLOOR && !this.finalBossDefeated;
+          ctx.fillStyle = isSealedFinal ? '#f97316' : '#facc15';
           ctx.font = 'bold 11px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText('▼ BAJAR [F]', iso.x, iso.y + hh - (is3D ? 18 : -4));
+          const lbl = isSealedFinal
+            ? '🔒 HADES'
+            : this.floor === 1
+            ? '▼ INFRAMUNDO [F]'
+            : this.floor === FINAL_FLOOR
+            ? '▼ ABISMO [F]'
+            : '▼ BAJAR [F]';
+          ctx.fillText(lbl, iso.x, iso.y + hh - (is3D ? 18 : -4));
+        } else if (t === TILE_STAIRS_UP) {
+          ctx.fillStyle = '#38bdf8';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.textAlign = 'center';
+          const lbl = this.floor === 2 ? '▲ SUPERFICIE [F]' : '▲ SUBIR [F]';
+          ctx.fillText(lbl, iso.x, iso.y + hh - (is3D ? 18 : -4));
         } else if (t === TILE_SHRINE) {
           ctx.fillStyle = this.dungeon.shrine?.used ? '#64748b' : '#38bdf8';
           ctx.font = 'bold 11px sans-serif';
@@ -1822,6 +2061,7 @@ export class ArchGame {
       nearby: this.getNearbyInteractable(),
       zoom: this.zoom,
       gameOver: this.gameOver,
+      finalBossDefeated: this.finalBossDefeated,
     });
   }
 
@@ -1830,15 +2070,21 @@ export class ArchGame {
     const classDef = HERO_CLASSES[this.hero.classId];
     this._emitHudTick(derived);
     if (!this.onUiUpdate) return;
+    const currentZone = this.dungeon?.isOverworld ? getZoneAt(this.dungeon, this.pos.x, this.pos.y) : null;
     this.onUiUpdate({
       hero: this.hero,
       derived,
       classDef,
       floor: this.floor,
+      finalFloor: FINAL_FLOOR,
+      isOverworld: Boolean(this.dungeon?.isOverworld),
+      currentZone: currentZone ? currentZone.name : null,
       biome: this.dungeon?.biome?.name || '',
       seed: this.seed,
       log: this.log,
       gameOver: this.gameOver,
+      finalBossDefeated: this.finalBossDefeated,
+      endlessUnlocked: this.endlessUnlocked,
       skills: classDef.skills,
       nearby: this.getNearbyInteractable(),
     });

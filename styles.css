@@ -1583,10 +1583,16 @@ dialog::backdrop {
 }
 
 .start-header h2,
-.gameover-box h2 {
+.gameover-box h2,
+.victory-box h2 {
   margin: 0;
   font-size: clamp(1rem, 0.85rem + 0.8vw, 1.3rem);
   color: var(--gold);
+}
+
+.victory-dialog {
+  border-color: #facc15;
+  box-shadow: 0 20px 65px rgba(250, 204, 21, 0.22), 0 0 28px rgba(168, 85, 247, 0.25);
 }
 
 .start-act-tag {

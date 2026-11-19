@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRng } from '../src/core/rng.js';
-import { generateDungeon, isWalkable, TILE_STAIRS, updateVisibility } from '../src/core/dungeon.js';
+import { FINAL_FLOOR, generateDungeon, getZoneAt, isWalkable, TILE_STAIRS, TILE_STAIRS_UP, updateVisibility } from '../src/core/dungeon.js';
 import {
   CLASS_BASE_ITEMS,
   TREASURE_CLASSES,
@@ -15,6 +15,7 @@ import {
 import {
   HERO_CLASSES,
   allocateSkillPoint,
+  createEnemy,
   createHero,
   computeHeroDerived,
   grantHeroXp,
@@ -313,7 +314,8 @@ test('sistema de efectos visuales 3D escala proporcionales al daño para Rayo de
 });
 
 test('autoEquipBest y salvageInferiorItems equipan lo superior y ofrendan sólo lo inferior', async () => {
-  const { ArchGame } = await import('../src/game/engine.js').catch(() => ({}));
+  const { ArchGame } = await import('../src/game/engine.js');
+  assert.ok(ArchGame?.prototype);
   const hero = createHero('campeon');
 
   // Crear ítems de prueba
@@ -360,27 +362,25 @@ test('autoEquipBest y salvageInferiorItems equipan lo superior y ofrendan sólo 
     },
   };
 
-  if (ArchGame?.prototype) {
-    mockGame.autoEquipBest = ArchGame.prototype.autoEquipBest.bind(mockGame);
-    mockGame.salvageInferiorItems = ArchGame.prototype.salvageInferiorItems.bind(mockGame);
+  mockGame.autoEquipBest = ArchGame.prototype.autoEquipBest.bind(mockGame);
+  mockGame.salvageInferiorItems = ArchGame.prototype.salvageInferiorItems.bind(mockGame);
 
-    const equipped = mockGame.autoEquipBest();
-    assert.ok(equipped >= 1, 'Debe haber auto-equipado objetos superiores');
-    assert.equal(hero.equipment.weapon.id, betterWeapon.id, 'Debe equipar el arma superior');
-    assert.equal(hero.equipment.charm.id, betterCharm.id, 'Debe equipar la reliquia superior');
+  const equipped = mockGame.autoEquipBest();
+  assert.ok(equipped >= 1, 'Debe haber auto-equipado objetos superiores');
+  assert.equal(hero.equipment.weapon.id, betterWeapon.id, 'Debe equipar el arma superior');
+  assert.equal(hero.equipment.charm.id, betterCharm.id, 'Debe equipar la reliquia superior');
 
-    const initialGold = hero.gold;
-    const res = mockGame.salvageInferiorItems();
-    assert.ok(res.count >= 1, 'Debe ofrendar los ítems inferiores');
-    assert.ok(hero.gold > initialGold, 'Debe sumar dracmas al héroe');
-    assert.ok(
-      hero.inventory.every((it) => {
-        const cmp = compareItems(it, hero.equipment[it.slot], hero.classId);
-        return cmp.verdict !== 'worse';
-      }),
-      'No deben quedar objetos inferiores en la mochila'
-    );
-  }
+  const initialGold = hero.gold;
+  const res = mockGame.salvageInferiorItems();
+  assert.ok(res.count >= 1, 'Debe ofrendar los ítems inferiores');
+  assert.ok(hero.gold > initialGold, 'Debe sumar dracmas al héroe');
+  assert.ok(
+    hero.inventory.every((it) => {
+      const cmp = compareItems(it, hero.equipment[it.slot], hero.classId);
+      return cmp.verdict !== 'worse';
+    }),
+    'No deben quedar objetos inferiores en la mochila'
+  );
 });
 
 test('modelos 3D de botín en el suelo tienen formas y texturas realistas y reflejan el equipo en el héroe', async () => {
@@ -444,7 +444,7 @@ test('modelos 3D de botín en el suelo tienen formas y texturas realistas y refl
   assert.ok(rig.offhandSlot.children.length > 0, 'offhandSlot debe alojar el escudo Aspis 3D');
   assert.ok(rig.armorSlot.children.length > 0, 'armorSlot debe alojar las hombreras/spaulders de coraza');
 
-  // Equipar Arco y Yelmo
+  // Equipar Arco y Yelmo: sostiene solo el arco centrado en la mano izquierda (sin espada en la derecha)
   updateHeroEquipmentVisuals(
     heroMesh,
     {
@@ -455,9 +455,255 @@ test('modelos 3D de botín en el suelo tienen formas y texturas realistas y refl
     'arquera'
   );
 
-  assert.ok(rig.weaponSlot.children.length > 0, 'weaponSlot debe alojar la flecha');
+  assert.equal(rig.isBowEquipped, true, 'El rig debe registrar que empuña arco');
+  assert.equal(rig.weaponSlot.children.length, 0, 'weaponSlot debe quedar vacío cuando sostiene arco');
   assert.ok(rig.offhandSlot.children.length > 0, 'offhandSlot debe sostener el arco');
+  const bowGroup = rig.offhandSlot.getObjectByName('heroBowGroup');
+  assert.ok(bowGroup, 'offhandSlot debe contener heroBowGroup');
+  assert.equal(bowGroup.position.y, -0.24, 'El arco debe sujetarse exactamente por la mano en el medio del semicírculo');
+  assert.equal(bowGroup.position.z, 0, 'El centro de la empuñadura del arco debe coincidir con la mano');
   assert.ok(rig.headgearSlot.children.length > 0, 'headgearSlot debe alojar el yelmo tracio');
+
+  // Cambiar a Espada: blande solo la espada, sin arco
+  updateHeroEquipmentVisuals(
+    heroMesh,
+    {
+      weapon: swordItem,
+      armor: null,
+      charm: null,
+    },
+    'arquera'
+  );
+
+  assert.equal(rig.isBowEquipped, false, 'El rig no debe quedar en modo arco al equipar espada');
+  assert.ok(rig.weaponSlot.children.length > 0, 'weaponSlot debe alojar la espada Xiphos 3D');
+  assert.equal(rig.offhandSlot.children.length, 0, 'offhandSlot no debe sostener arco cuando empuña espada');
+});
+
+test('nivel 1 sobre la tierra genera mundo vivo con pasto, tierra, agua, puentes, flora y zonas míticas griegas', async () => {
+  const d = generateDungeon({ width: 48, height: 48, level: 1, seed: 'olimpia-01' });
+  assert.equal(d.isOverworld, true);
+  assert.equal(d.biome.id, 'helade');
+  assert.equal(d.zones.length, 5);
+
+  const terrainCounts = new Map();
+  for (let y = 0; y < d.height; y++) {
+    for (let x = 0; x < d.width; x++) {
+      const k = d.terrain[y][x];
+      terrainCounts.set(k, (terrainCounts.get(k) || 0) + 1);
+    }
+  }
+
+  for (const expectedTerrain of ['grass', 'meadow', 'dirt', 'sand', 'water', 'shallow_water', 'bridge', 'marble']) {
+    assert.ok((terrainCounts.get(expectedTerrain) || 0) > 0, `Debe existir terreno de tipo '${expectedTerrain}' en el Nivel 1`);
+  }
+
+  assert.ok(d.sceneryProps.length > 20, 'Debe poblar el paisaje con vegetación, columnas y muelle');
+  assert.ok(d.ambientCritters.length > 0, 'Debe poblar fauna viva (mariposas y luciérnagas)');
+
+  const spawnZone = getZoneAt(d, d.spawn.x, d.spawn.y);
+  assert.equal(spawnZone?.id, 'aqueronte');
+  const shrineZone = getZoneAt(d, d.shrine.x + 0.5, d.shrine.y + 0.5);
+  assert.equal(shrineZone?.id, 'delfos');
+
+  const { createOverworldProp3D, createCritterMesh3D } = await import('../src/game/models3d.js');
+  for (const kind of ['olive', 'cypress', 'flower', 'reed', 'boulder', 'column', 'dock', 'boat']) {
+    const pm = createOverworldProp3D({ kind, x: 5, y: 5, scale: 1 });
+    assert.ok(pm.isGroup, `Prop 3D ${kind} debe construirse`);
+  }
+  const butterfly = createCritterMesh3D({ kind: 'butterfly', x: 5, y: 5, color: 0xfbbf24 });
+  assert.ok(butterfly.isGroup);
+});
+
+test('piso 22 contiene al monstruo final Hades, su modelo 3D y desbloquea victoria + abismo infinito', async () => {
+  assert.equal(FINAL_FLOOR, 22);
+  const f22 = generateDungeon({ width: 44, height: 44, level: 22, seed: 'tartaro-final' });
+  assert.equal(f22.isFinalFloor, true);
+  assert.equal(f22.isOverworld, false);
+  assert.equal(f22.biome.id, 'trono_tartaro');
+
+  const hadesSpawn = f22.enemySpawns.find((s) => s.kind === 'hades' && s.isFinalBoss);
+  assert.ok(hadesSpawn, 'El Piso 22 debe incluir el spawn del jefe final Hades');
+
+  const hades = createEnemy(hadesSpawn, 'final-hades');
+  assert.equal(hades.isFinalBoss, true);
+  assert.equal(hades.name, 'Hades, Soberano del Tártaro');
+  assert.ok(hades.hp > 2000, 'Hades en Piso 22 debe tener vida acorde a jefe final');
+
+  const { createEnemyMesh3D } = await import('../src/game/models3d.js');
+  const hadesMesh = createEnemyMesh3D(hades);
+  assert.ok(hadesMesh.isGroup);
+  assert.equal(hadesMesh.userData.rig.kind, 'hades');
+
+  const { ArchGame } = await import('../src/game/engine.js');
+  const events = [];
+  const hero = createHero('hoplita');
+  const mockGame = {
+    hero,
+    floor: 22,
+    seed: 'test-v',
+    pos: { x: 10, y: 10 },
+    groundDrops: [],
+    finalBossDefeated: false,
+    endlessUnlocked: false,
+    renderer3d: null,
+    addFloater: () => {},
+    addLog: () => {},
+    shakeScreen: () => {},
+    _advanceQuest: () => {},
+    _notify: () => {},
+    onEvent: (ev) => events.push(ev),
+  };
+
+  ArchGame.prototype._onEnemyKilled.call(mockGame, hades);
+  assert.equal(mockGame.finalBossDefeated, true);
+  assert.equal(mockGame.endlessUnlocked, true);
+  assert.ok(events.some((e) => e.type === 'victory'), 'Matar a Hades debe emitir evento victory');
+  assert.ok(mockGame.groundDrops.some((d) => d.kind === 'item' && d.item?.rarity === 'unique'), 'Hades debe soltar reliquia única');
+});
+
+test('pisos 2+ generan escaleras de ascenso (TILE_STAIRS_UP) conectadas y permiten bajar y subir con [F] y [Espacio]', async () => {
+  const f1 = generateDungeon({ width: 48, height: 48, level: 1, seed: 'ascenso-test' });
+  assert.equal(f1.stairsUp, null, 'El Piso 1 (Superficie) no tiene escaleras de ascenso');
+  assert.equal(f1.grid[f1.stairs.y][f1.stairs.x], TILE_STAIRS);
+
+  const f2 = generateDungeon({ width: 44, height: 44, level: 2, seed: 'ascenso-test' });
+  assert.ok(f2.stairsUp, 'El Piso 2 debe incluir coordenadas de stairsUp');
+  assert.equal(f2.grid[f2.stairsUp.y][f2.stairsUp.x], TILE_STAIRS_UP);
+  assert.equal(f2.grid[f2.stairs.y][f2.stairs.x], TILE_STAIRS);
+  assert.equal(isWalkable(f2, f2.stairsUp.x + 0.5, f2.stairsUp.y + 0.5), true);
+
+  const { ArchRenderer3D } = await import('../src/game/models3d.js');
+  const { Group, DirectionalLight, AmbientLight, PointLight } = await import('three');
+  const r3d = Object.create(ArchRenderer3D.prototype);
+  r3d.enabled = true;
+  r3d.dungeonGroup = new Group();
+  r3d.actorsGroup = new Group();
+  r3d.fxGroup = new Group();
+  r3d.enemyMeshes = new Map();
+  r3d.chestMeshes = new Map();
+  r3d.ambientLight = new AmbientLight();
+  r3d.dirLight = new DirectionalLight();
+  r3d.heroLight = new PointLight();
+  r3d.campfireLight = new PointLight();
+  r3d.buildDungeon(f2);
+  const upTileMesh = r3d.tileMeshes[f2.stairsUp.y]?.[f2.stairsUp.x];
+  assert.ok(upTileMesh?.isGroup && upTileMesh.children.length >= 7, 'La escalera de subida 3D debe tener peldaños y arco');
+
+  const { ArchGame } = await import('../src/game/engine.js');
+  const winListeners = new Map();
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevRaf = globalThis.requestAnimationFrame;
+
+  globalThis.window = {
+    addEventListener(type, fn) {
+      if (!winListeners.has(type)) winListeners.set(type, []);
+      winListeners.get(type).push(fn);
+    },
+    devicePixelRatio: 1,
+  };
+  globalThis.document = {
+    addEventListener() {},
+  };
+  globalThis.requestAnimationFrame = () => 1;
+
+  try {
+    const fakeCanvas = {
+      width: 800,
+      height: 600,
+      getContext: () => ({
+        setTransform() {},
+        clearRect() {},
+        fillRect() {},
+        save() {},
+        restore() {},
+        translate() {},
+        scale() {},
+        beginPath() {},
+        moveTo() {},
+        lineTo() {},
+        closePath() {},
+        fill() {},
+        stroke() {},
+        fillText() {},
+        arc() {},
+        ellipse() {},
+        measureText: () => ({ width: 40 }),
+      }),
+      addEventListener() {},
+    };
+
+    const events = [];
+    const game = new ArchGame({
+      canvas: fakeCanvas,
+      onUiUpdate: () => {},
+      onHudTick: () => {},
+      onEvent: (ev) => events.push(ev),
+    });
+    game.startNewGame({ classId: 'hoplita', heroName: 'Teseo', seed: 'ascenso-test' });
+    assert.equal(game.floor, 1);
+
+    // Abrir un cofre en el Piso 1 para comprobar que el estado se conserva al bajar y volver a subir
+    game.dungeon.chests[0].opened = true;
+
+    // Colocar al héroe sobre la entrada al Inframundo (Piso 1) y pulsar 'f'
+    game.pos = { x: game.dungeon.stairs.x + 0.5, y: game.dungeon.stairs.y + 0.5 };
+    const nearDownF1 = game.getNearbyInteractable();
+    assert.equal(nearDownF1?.kind, 'stairs');
+
+    const fireKeydown = (eventProps) => {
+      for (const fn of winListeners.get('keydown') || []) {
+        fn(eventProps);
+      }
+    };
+
+    // Ctrl+F no debe activar la interacción del juego
+    fireKeydown({ key: 'f', ctrlKey: true });
+    assert.equal(game.floor, 1, 'Ctrl+F no debe disparar interactNearby');
+
+    // Pulsar [F] debe descender al Piso 2
+    fireKeydown({ key: 'f' });
+    assert.equal(game.floor, 2, 'Pulsar [F] en escaleras de bajada debe descender al Piso 2');
+    assert.ok(
+      Math.hypot(game.dungeon.stairsUp.x + 0.5 - game.pos.x, game.dungeon.stairsUp.y + 0.5 - game.pos.y) <= 1.35,
+      'Al descender al Piso 2 el héroe debe aparecer junto a las escaleras de subida'
+    );
+
+    // En la posición de llegada del Piso 2, el interactuable cercano es stairsUp
+    const nearUpF2 = game.getNearbyInteractable();
+    assert.equal(nearUpF2?.kind, 'stairsUp');
+
+    // Key-repeat de [F] no debe disparar transición accidental
+    fireKeydown({ key: 'f', repeat: true });
+    assert.equal(game.floor, 2, 'Keydown con repeat=true no debe cambiar de piso');
+
+    // Bajar del Piso 2 al Piso 3 usando [F] (mayúscula)
+    game.pos = { x: game.dungeon.stairs.x + 0.5, y: game.dungeon.stairs.y + 0.5 };
+    fireKeydown({ key: 'F' });
+    assert.equal(game.floor, 3, 'Pulsar [F] debe descender del Piso 2 al Piso 3');
+
+    // Subir del Piso 3 al Piso 2 con [F]
+    game.pos = { x: game.dungeon.stairsUp.x + 0.5, y: game.dungeon.stairsUp.y + 0.5 };
+    fireKeydown({ key: 'f' });
+    assert.equal(game.floor, 2, 'Pulsar [F] en stairsUp debe subir del Piso 3 al Piso 2');
+    assert.ok(
+      Math.hypot(game.dungeon.stairs.x + 0.5 - game.pos.x, game.dungeon.stairs.y + 0.5 - game.pos.y) <= 1.35,
+      'Al subir del Piso 3 al Piso 2 el héroe debe aparecer junto a las escaleras de bajada del Piso 2'
+    );
+
+    // Subir del Piso 2 al Piso 1 con [Espacio] (sin enemigos cercanos)
+    game.enemies = [];
+    game.attackCdLeft = 0;
+    game.pos = { x: game.dungeon.stairsUp.x + 0.5, y: game.dungeon.stairsUp.y + 0.5 };
+    fireKeydown({ key: ' ' });
+    assert.equal(game.floor, 1, 'Pulsar [Espacio] sin enemigos en rango también permite subir al Piso 1');
+    assert.equal(game.dungeon.chests[0].opened, true, 'El Piso 1 debe conservar el estado de cofres abiertos al regresar');
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.requestAnimationFrame = prevRaf;
+  }
 });
 
 

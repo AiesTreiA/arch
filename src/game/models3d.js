@@ -11,7 +11,7 @@
  */
 import * as THREE from 'three';
 import { HERO_CLASSES } from '../core/combat.js';
-import { TILE_SHRINE, TILE_STAIRS, TILE_WALL } from '../core/dungeon.js';
+import { TILE_SHRINE, TILE_STAIRS, TILE_STAIRS_UP, TILE_WALL } from '../core/dungeon.js';
 import { getItemVisualType } from '../core/loot.js';
 
 // Escala ortográfica exacta para coincidir al píxel con toIso(gx, gy) donde TILE_W=56, TILE_H=28
@@ -487,34 +487,73 @@ export function updateHeroEquipmentVisuals(heroMesh, equipment = {}, classId = '
 
   const charmVisual = charm ? getItemVisualType(charm) : null;
   const isShieldEquipped = charmVisual === 'shield';
+  const usesBow = weaponVisual === 'bow' || (!weapon && effectiveClassId === 'arquera');
 
-  if (weaponVisual === 'bow' || (!weapon && effectiveClassId === 'arquera')) {
-    // Arco en la mano izquierda, flecha en la derecha
+  rig.isBowEquipped = usesBow;
+  rig.leftArmPivot.rotation.set(0, 0, 0);
+  rig.rightArmPivot.rotation.set(0, 0, 0);
+
+  if (usesBow) {
+    // Postura de tiro con arco: brazo de arco extendido al frente, brazo de cuerda recogido atrás, sin arma en weaponSlot
+    rig.defaultLeftArmX = -1.46;
+    rig.defaultRightArmX = -1.28;
+    rig.leftArmPivot.rotation.set(-1.46, 0, 0.26);
+    rig.rightArmPivot.rotation.set(-1.28, 0, -0.58);
+
+    const bowRadius = 0.26;
+    const bowDepthScale = 0.56;
+    const bowDepth = bowRadius * bowDepthScale;
+
     const bowGroup = new THREE.Group();
-    bowGroup.position.set(0, -0.2, 0.18);
+    bowGroup.name = 'heroBowGroup';
+    bowGroup.position.set(0, -0.24, 0);
+    // Compensar rotación del brazo para mantener el arco vertical en posición de disparo (ligero canting natural)
+    const invArmQ = new THREE.Quaternion().setFromEuler(rig.leftArmPivot.rotation).invert();
+    const cantQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.12);
+    bowGroup.quaternion.copy(invArmQ).multiply(cantQ);
+
+    const arcWrap = new THREE.Group();
     const arc = new THREE.Mesh(
-      new THREE.TorusGeometry(0.26, 0.022, 6, 14, Math.PI * 1.15),
-      mat(weapon ? weaponColor : 0x86efac, { metalness: 0.7, roughness: 0.2, emissive: weapon ? weaponEmissive : 0x14532d, emissiveIntensity: 0.45 })
+      new THREE.TorusGeometry(bowRadius, 0.022, 6, 16, Math.PI),
+      mat(weapon ? weaponColor : 0x86efac, {
+        metalness: 0.7,
+        roughness: 0.22,
+        emissive: weapon ? weaponEmissive : 0x14532d,
+        emissiveIntensity: weapon ? weaponIntensity * 0.65 : 0.45,
+      })
     );
-    arc.rotation.z = -Math.PI * 0.57;
-    arc.rotation.y = Math.PI / 2;
-    const bowString = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.5, 4), steelMat);
-    bowString.position.z = -0.04;
-    bowGroup.add(arc, bowString);
+    arc.rotation.z = -Math.PI / 2;
+    arc.rotation.y = -Math.PI / 2;
+    arcWrap.add(arc);
+    arcWrap.scale.set(1, 1, bowDepthScale);
+    arcWrap.position.z = -bowDepth;
+
+    // Empuñadura centrada exactamente en el medio del semicírculo (en la mano)
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.075, 7), leatherMat);
+
+    // Cuerda tensa entre ambos extremos del semicírculo
+    const bowString = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, bowRadius * 2, 4), steelMat);
+    bowString.position.z = -bowDepth;
+
+    // Flecha apoyada horizontalmente en el arco (de la cuerda hacia adelante), nunca como espada en la otra mano
+    const arrowGroup = new THREE.Group();
+    arrowGroup.position.set(0.022, 0.015, 0);
+    const arrowMat = mat(weapon ? weaponColor : 0xe2e8f0, {
+      metalness: 0.55,
+      roughness: 0.3,
+      emissive: weapon ? weaponEmissive : 0x22c55e,
+      emissiveIntensity: weapon ? weaponIntensity * 0.55 : 0.35,
+    });
+    const arrowShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.34, 5), arrowMat);
+    arrowShaft.rotation.x = Math.PI / 2;
+    arrowShaft.position.z = 0.025;
+    const arrowTip = new THREE.Mesh(new THREE.ConeGeometry(0.016, 0.055, 4), steelMat);
+    arrowTip.rotation.x = Math.PI / 2;
+    arrowTip.position.z = 0.21;
+    arrowGroup.add(arrowShaft, arrowTip);
+
+    bowGroup.add(arcWrap, grip, bowString, arrowGroup);
     rig.offhandSlot.add(bowGroup);
-
-    const arrow = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.012, 0.012, 0.48, 5),
-      mat(weapon ? weaponColor : 0x4ade80, { emissive: weapon ? weaponEmissive : 0x22c55e, emissiveIntensity: 0.85 })
-    );
-    arrow.rotation.x = Math.PI / 2;
-    arrow.position.set(0, -0.2, 0.18);
-    rig.weaponSlot.add(arrow);
-
-    rig.defaultLeftArmX = -1.15;
-    rig.defaultRightArmX = -0.9;
-    rig.leftArmPivot.rotation.x = -1.15;
-    rig.rightArmPivot.rotation.x = -0.9;
 
   } else if (weaponVisual === 'spear' || (!weapon && effectiveClassId === 'hoplita')) {
     // Lanza Dory en la mano derecha
@@ -640,7 +679,7 @@ export function updateHeroEquipmentVisuals(heroMesh, equipment = {}, classId = '
   }
 
   // 3. Offhand / Escudo / Segundo arma
-  if (weaponVisual !== 'bow' && (!weapon ? effectiveClassId !== 'arquera' : true)) {
+  if (!usesBow) {
     if (isShieldEquipped || (!charm && effectiveClassId === 'hoplita')) {
       // Escudo Aspis en mano izquierda
       const charmRarity = charm?.rarity || 'common';
@@ -1125,6 +1164,7 @@ export function createHeroMesh3D(classId = 'hoplita') {
     furyAura,
     defaultLeftArmX: leftArmPivot.rotation.x,
     defaultRightArmX: rightArmPivot.rotation.x,
+    isBowEquipped: false,
     walkPhase: 0,
     attackTimer: 0,
     whirlwindTimer: 0,
@@ -1148,22 +1188,32 @@ export function createEnemyMesh3D(enemy) {
   const root = new THREE.Group();
   root.name = `enemy-${enemy.id}`;
 
-  const tierScale = tier === 'boss' ? 1.48 : tier === 'champion' ? 1.18 : 1.0;
+  const tierScale = kind === 'hades' ? 1.72 : tier === 'boss' ? 1.48 : tier === 'champion' ? 1.18 : 1.0;
   const bodyGroup = new THREE.Group();
   bodyGroup.scale.setScalar(tierScale);
   root.add(bodyGroup);
 
-  // Anillo en el suelo para Campeones y Jefes
-  if (tier !== 'normal') {
-    const ringColor = tier === 'boss' ? 0xf97316 : 0x38bdf8;
+  // Anillo en el suelo para Campeones, Jefes y Hades
+  if (tier !== 'normal' || kind === 'hades') {
+    const ringColor = kind === 'hades' ? 0xa855f7 : tier === 'boss' ? 0xf97316 : 0x38bdf8;
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.32 * tierScale, 0.42 * tierScale, 24),
-      new THREE.MeshBasicMaterial({ color: ringColor, side: THREE.DoubleSide, transparent: true, opacity: 0.7 })
+      new THREE.RingGeometry(0.32 * tierScale, 0.44 * tierScale, 28),
+      new THREE.MeshBasicMaterial({ color: ringColor, side: THREE.DoubleSide, transparent: true, opacity: kind === 'hades' ? 0.85 : 0.7 })
     );
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.02;
     root.add(ring);
     root.userData.tierRing = ring;
+
+    if (kind === 'hades') {
+      const outerHalo = new THREE.Mesh(
+        new THREE.RingGeometry(0.5 * tierScale, 0.56 * tierScale, 32),
+        new THREE.MeshBasicMaterial({ color: 0xf97316, side: THREE.DoubleSide, transparent: true, opacity: 0.72 })
+      );
+      outerHalo.rotation.x = -Math.PI / 2;
+      outerHalo.position.y = 0.025;
+      root.add(outerHalo);
+    }
   }
 
   const leftLegPivot = new THREE.Group();
@@ -1304,6 +1354,87 @@ export function createEnemyMesh3D(enemy) {
     bow.position.set(0, -0.12, 0.16);
     leftArmPivot.add(bow);
     leftArmPivot.rotation.x = -1.0;
+  } else if (kind === 'hades') {
+    // Hades, Soberano del Tártaro: Dios de los Muertos con corona sombría, manto espectral y Bidente llameante
+    const obsidianMat = mat(0x1e1035, { roughness: 0.25, metalness: 0.85, emissive: 0x3b0764, emissiveIntensity: 0.45 });
+    const darkGoldMat = mat(0xf59e0b, { roughness: 0.22, metalness: 0.9, emissive: 0x78350f, emissiveIntensity: 0.45 });
+    const abyssFireMat = mat(0xa855f7, { emissive: 0x9333ea, emissiveIntensity: 1.4, roughness: 0.2 });
+    const eyeMat = mat(0xf97316, { emissive: 0xea580c, emissiveIntensity: 1.6 });
+
+    for (const p of [leftLegPivot, rightLegPivot]) {
+      const greave = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.055, 0.34, 8), obsidianMat);
+      greave.position.y = -0.17;
+      p.add(greave);
+    }
+
+    // Manto real del Inframundo
+    const robe = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.26, 0.24, 10), obsidianMat);
+    robe.position.y = 0.02;
+    const chest = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.42, 0.24), obsidianMat);
+    chest.position.y = 0.22;
+    const heartCore = new THREE.Mesh(new THREE.OctahedronGeometry(0.085, 0), abyssFireMat);
+    heartCore.position.set(0, 0.25, 0.125);
+    const cloak = new THREE.Mesh(
+      new THREE.BoxGeometry(0.38, 0.62, 0.04),
+      mat(0x4c1d95, { roughness: 0.65, emissive: 0x2e1065, emissiveIntensity: 0.4 })
+    );
+    cloak.position.set(0, 0.12, -0.16);
+    cloak.rotation.x = 0.16;
+    torsoPivot.add(robe, chest, heartCore, cloak);
+
+    // Cabeza con Corona Dentada de Hades y ojos incandescentes
+    const helmHead = new THREE.Mesh(new THREE.CylinderGeometry(0.125, 0.13, 0.24, 10), obsidianMat);
+    helmHead.position.set(0, 0.52, 0);
+    torsoPivot.add(helmHead);
+    for (let ci = 0; ci < 5; ci++) {
+      const ang = (ci / 5) * Math.PI * 2;
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.028, 0.15, 5), darkGoldMat);
+      spike.position.set(Math.cos(ang) * 0.1, 0.68, Math.sin(ang) * 0.1);
+      torsoPivot.add(spike);
+    }
+    for (const side of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.024, 0.02), eyeMat);
+      eye.position.set(side * 0.045, 0.52, 0.125);
+      const pauldron = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.22, 6), obsidianMat);
+      pauldron.position.set(side * 0.24, 0.4, 0);
+      pauldron.rotation.z = -side * 0.45;
+      const soulOrb = new THREE.Mesh(new THREE.OctahedronGeometry(0.055, 0), abyssFireMat);
+      soulOrb.position.set(side * 0.3, 0.55, 0);
+      torsoPivot.add(eye, pauldron, soulOrb);
+    }
+
+    leftArmPivot.position.set(-0.24, 0.36, 0);
+    rightArmPivot.position.set(0.24, 0.36, 0);
+    torsoPivot.add(leftArmPivot, rightArmPivot);
+
+    for (const p of [leftArmPivot, rightArmPivot]) {
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.32, 7), obsidianMat);
+      arm.position.y = -0.14;
+      p.add(arm);
+    }
+
+    // Bidente Real de Hades (lanza bifurcada llameante en mano derecha)
+    const bident = new THREE.Group();
+    bident.position.set(0, -0.24, 0.14);
+    bident.rotation.x = Math.PI / 2 - 0.3;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.022, 1.12, 7), darkGoldMat);
+    pole.position.y = 0.22;
+    const crossbar = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.035), darkGoldMat);
+    crossbar.position.y = 0.76;
+    for (const px of [-0.085, 0.085]) {
+      const prong = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.26, 5), abyssFireMat);
+      prong.position.set(px, 0.9, 0);
+      bident.add(prong);
+    }
+    bident.add(pole, crossbar);
+    rightArmPivot.add(bident);
+    rightArmPivot.rotation.x = -0.45;
+
+    // Esfera de Almas del Estigia en mano izquierda
+    const soulSphere = new THREE.Mesh(new THREE.IcosahedronGeometry(0.085, 0), eyeMat);
+    soulSphere.position.set(0, -0.26, 0.16);
+    leftArmPivot.add(soulSphere);
+    leftArmPivot.rotation.x = -0.65;
   } else {
     // Minotauro Guardián (Boss / Élite): Coloso taurino con cuernos gigantes y Labrys bipenne
     const hideMat = mat(tier === 'boss' ? 0x9a3412 : 0x7c2d12, { roughness: 0.7, metalness: 0.15 });
@@ -1383,6 +1514,8 @@ export function createEnemyMesh3D(enemy) {
     rightArmPivot,
     leftWingPivot,
     rightWingPivot,
+    defaultLeftArmX: leftArmPivot.rotation.x,
+    defaultRightArmX: rightArmPivot.rotation.x,
     walkPhase: Math.random() * Math.PI * 2,
     attackTimer: 0,
     hitFlashTimer: 0,
@@ -1486,6 +1619,7 @@ export function updateActorRig3D(mesh, { dt, moving = false, targetFacing = null
   }
 
   // Ciclo de marcha bípeda vs respiración idle
+  const armWalkFactor = rig.isBowEquipped ? 0.08 : 0.45;
   if (moving) {
     rig.walkPhase += dt * 11.5;
     const swing = Math.sin(rig.walkPhase) * 0.65;
@@ -1494,10 +1628,10 @@ export function updateActorRig3D(mesh, { dt, moving = false, targetFacing = null
     if (rig.leftLegPivot) rig.leftLegPivot.rotation.x = swing;
     if (rig.rightLegPivot) rig.rightLegPivot.rotation.x = -swing;
     if (rig.leftArmPivot && rig.attackTimer <= 0) {
-      rig.leftArmPivot.rotation.x = (rig.defaultLeftArmX ?? 0) - swing * 0.45;
+      rig.leftArmPivot.rotation.x = (rig.defaultLeftArmX ?? 0) - swing * armWalkFactor;
     }
     if (rig.rightArmPivot && rig.attackTimer <= 0) {
-      rig.rightArmPivot.rotation.x = (rig.defaultRightArmX ?? 0) + swing * 0.45;
+      rig.rightArmPivot.rotation.x = (rig.defaultRightArmX ?? 0) + swing * armWalkFactor;
     }
     if (rig.capePivot) {
       rig.capePivot.rotation.x = 0.38 + Math.sin(rig.walkPhase * 2) * 0.12;
@@ -1526,20 +1660,220 @@ export function updateActorRig3D(mesh, { dt, moving = false, targetFacing = null
     rig.rightWingPivot.rotation.z = -flap;
   }
 
-  // Animación de golpe con el brazo derecho / cuerpo
+  // Animación de ataque (tensión de arco vs tajo con arma cuerpo a cuerpo)
   if (rig.attackTimer > 0) {
     rig.attackTimer = Math.max(0, rig.attackTimer - dt);
     const t = rig.attackTimer / 0.28; // 1 -> 0
     const swing = Math.sin(t * Math.PI);
-    if (rig.rightArmPivot) {
-      rig.rightArmPivot.rotation.x = (rig.defaultRightArmX ?? -0.3) - swing * 1.35;
-    }
-    if (rig.torsoPivot) {
-      rig.torsoPivot.rotation.y = swing * 0.35;
+    if (rig.isBowEquipped) {
+      if (rig.rightArmPivot) {
+        rig.rightArmPivot.rotation.x = (rig.defaultRightArmX ?? -1.28) + swing * 0.45;
+      }
+      if (rig.leftArmPivot) {
+        rig.leftArmPivot.rotation.x = (rig.defaultLeftArmX ?? -1.46) - swing * 0.1;
+      }
+      if (rig.torsoPivot) {
+        rig.torsoPivot.rotation.y = -swing * 0.18;
+      }
+    } else {
+      if (rig.rightArmPivot) {
+        rig.rightArmPivot.rotation.x = (rig.defaultRightArmX ?? -0.3) - swing * 1.35;
+      }
+      if (rig.torsoPivot) {
+        rig.torsoPivot.rotation.y = swing * 0.35;
+      }
     }
   } else if (rig.torsoPivot) {
     rig.torsoPivot.rotation.y *= 0.8;
   }
+}
+
+/**
+ * Construye vegetación mediterránea, ruinas dóricas, muelles, barcas y rocas 3D
+ * para el paisaje vivo del Nivel 1 sobre la tierra.
+ */
+export function createOverworldProp3D(prop) {
+  const { kind, scale = 1 } = prop;
+  const root = new THREE.Group();
+  root.name = `prop-${kind}`;
+
+  const trunkMat = mat(0x5c3a21, { roughness: 0.9, metalness: 0.05 });
+  const marbleMat = mat(0xf1f5f9, { roughness: 0.45, metalness: 0.08 });
+  const goldMat = mat(0xe5b869, { roughness: 0.3, metalness: 0.75 });
+
+  if (kind === 'olive') {
+    // Olivo griego de copa plateada-oliva y tronco nudoso
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.105, 0.46, 6), trunkMat);
+    trunk.position.y = 0.22;
+    trunk.rotation.z = 0.08;
+    root.add(trunk);
+
+    const leafColors = [0x4d7c3f, 0x659050, 0x7ca663];
+    const blobs = [
+      { x: 0, y: 0.56, z: 0, r: 0.28 },
+      { x: -0.15, y: 0.5, z: 0.1, r: 0.22 },
+      { x: 0.16, y: 0.52, z: -0.08, r: 0.22 },
+      { x: 0.04, y: 0.68, z: 0.06, r: 0.2 },
+    ];
+    blobs.forEach((b, idx) => {
+      const crown = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(b.r, 1),
+        mat(leafColors[idx % leafColors.length], { roughness: 0.85, metalness: 0.04 })
+      );
+      crown.position.set(b.x, b.y, b.z);
+      root.add(crown);
+    });
+  } else if (kind === 'cypress') {
+    // Ciprés mediterráneo esbelto
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.34, 6), trunkMat);
+    trunk.position.y = 0.17;
+    root.add(trunk);
+
+    const tiers = [
+      { y: 0.45, r: 0.22, h: 0.48, c: 0x1e4d34 },
+      { y: 0.75, r: 0.17, h: 0.46, c: 0x245e3e },
+      { y: 1.02, r: 0.11, h: 0.38, c: 0x2c714b },
+    ];
+    for (const tier of tiers) {
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(tier.r, tier.h, 7), mat(tier.c, { roughness: 0.85 }));
+      cone.position.y = tier.y;
+      root.add(cone);
+    }
+  } else if (kind === 'flower') {
+    // Pradera de flores silvestres griegas (amapolas, asfódelos dorados, lirios)
+    const palette = [0xef4444, 0xfacc15, 0xf8fafc, 0xc084fc];
+    const stemMat = mat(0x22c55e, { roughness: 0.8 });
+    for (let i = 0; i < 4; i++) {
+      const ang = (i / 4) * Math.PI * 2 + 0.4;
+      const dist = 0.09 + (i % 2) * 0.06;
+      const fx = Math.cos(ang) * dist;
+      const fz = Math.sin(ang) * dist;
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.01, 0.12, 4), stemMat);
+      stem.position.set(fx, 0.06, fz);
+      const bloom = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.036, 0),
+        mat(palette[i % palette.length], { emissive: palette[i % palette.length], emissiveIntensity: 0.15, roughness: 0.5 })
+      );
+      bloom.position.set(fx, 0.13, fz);
+      root.add(stem, bloom);
+    }
+  } else if (kind === 'reed') {
+    // Juncos junto a la orilla del río o agua
+    const stalkMat = mat(0x65a30d, { roughness: 0.8 });
+    const headMat = mat(0x78350f, { roughness: 0.9 });
+    for (let i = 0; i < 4; i++) {
+      const rx = (i - 1.5) * 0.055;
+      const rz = ((i % 2) - 0.5) * 0.08;
+      const h = 0.32 + (i % 3) * 0.08;
+      const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.014, h, 4), stalkMat);
+      stalk.position.set(rx, h * 0.5 - 0.06, rz);
+      stalk.rotation.z = (i - 1.5) * 0.08;
+      const head = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.08, 5), headMat);
+      head.position.set(rx + Math.sin(stalk.rotation.z) * h * 0.4, h - 0.08, rz);
+      root.add(stalk, head);
+    }
+  } else if (kind === 'boulder') {
+    const rock = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(0.28, 1),
+      mat(0x78716c, { roughness: 0.92, metalness: 0.06 })
+    );
+    rock.scale.set(1.15, 0.78, 1.05);
+    rock.position.y = 0.16;
+    rock.rotation.set(0.3, prop.x * 1.3, 0.2);
+    root.add(rock);
+  } else if (kind === 'column') {
+    // Columna dórica de mármol blanco griego (Delfos)
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.12, 0.46), marbleMat);
+    plinth.position.y = 0.06;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.18, 1.15, 10), marbleMat);
+    shaft.position.y = 0.68;
+    const capital = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.42), goldMat);
+    capital.position.y = 1.28;
+    root.add(plinth, shaft, capital);
+  } else if (kind === 'broken_column') {
+    // Ruina caída en la costa o laderas
+    const stump = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, 0.48, 10), marbleMat);
+    stump.position.y = 0.24;
+    const fallen = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.16, 0.56, 10), marbleMat);
+    fallen.rotation.z = Math.PI / 2 - 0.12;
+    fallen.rotation.y = 0.65;
+    fallen.position.set(0.28, 0.14, 0.12);
+    root.add(stump, fallen);
+  } else if (kind === 'dock') {
+    // Embarcadero de madera en la Ribera del Aqueronte
+    const woodMat = mat(0x854d0e, { roughness: 0.85 });
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.07, 0.82), woodMat);
+    deck.position.set(0.25, 0.06, 0);
+    root.add(deck);
+    for (const [px, pz] of [
+      [-0.2, -0.34],
+      [-0.2, 0.34],
+      [0.7, -0.34],
+      [0.7, 0.34],
+    ]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.45, 6), trunkMat);
+      post.position.set(px, 0.05, pz);
+      root.add(post);
+    }
+    const lantern = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.06, 0),
+      mat(0xfacc15, { emissive: 0xf59e0b, emissiveIntensity: 1.4 })
+    );
+    lantern.position.set(0.7, 0.32, 0.34);
+    root.add(lantern);
+  } else if (kind === 'boat') {
+    // Barca griega flotando sobre el río Aqueronte
+    const hullMat = mat(0x78350f, { roughness: 0.78 });
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.14, 1.05), hullMat);
+    const prow = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.35, 4), hullMat);
+    prow.rotation.x = -Math.PI / 2;
+    prow.rotation.y = Math.PI / 4;
+    prow.position.set(0, 0.02, -0.68);
+    const lantern = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.055, 0),
+      mat(0x38bdf8, { emissive: 0x0284c7, emissiveIntensity: 1.3 })
+    );
+    lantern.position.set(0, 0.2, -0.78);
+    root.add(hull, prow, lantern);
+    root.position.y = -0.06;
+  }
+
+  root.scale.setScalar(scale);
+  enableShadows(root, true, true);
+  return root;
+}
+
+/** Construye una criatura viva ambiental 3D (mariposa de Arcadia o luciérnaga del río). */
+export function createCritterMesh3D(critter) {
+  const root = new THREE.Group();
+  const baseColor = critter.color || 0xfbbf24;
+
+  if (critter.kind === 'firefly') {
+    const glow = new THREE.Mesh(
+      new THREE.SphereGeometry(0.036, 6, 6),
+      mat(baseColor, { emissive: baseColor, emissiveIntensity: 1.6, roughness: 0.2 })
+    );
+    root.add(glow);
+    root.userData = { kind: 'firefly', baseX: critter.x, baseY: critter.y, phase: critter.phase || 0 };
+  } else {
+    const wingMat = new THREE.MeshBasicMaterial({ color: baseColor, side: THREE.DoubleSide });
+    const leftWing = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.09), wingMat);
+    leftWing.position.x = -0.04;
+    leftWing.rotation.x = -Math.PI / 2;
+    const rightWing = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.09), wingMat);
+    rightWing.position.x = 0.04;
+    rightWing.rotation.x = -Math.PI / 2;
+    root.add(leftWing, rightWing);
+    root.userData = {
+      kind: 'butterfly',
+      leftWing,
+      rightWing,
+      baseX: critter.x,
+      baseY: critter.y,
+      phase: critter.phase || 0,
+    };
+  }
+  return root;
 }
 
 /**
@@ -1618,6 +1952,10 @@ export class ArchRenderer3D {
       this.enemyMeshes = new Map();
       this.dropMeshes = [];
       this.dropMeshesMap = new Map();
+      this.waterMeshes = [];
+      this.sceneryPropMeshes = [];
+      this.critterMeshes = [];
+      this.boatMeshes = [];
       this.lastEquippedKey = null;
       this.projMeshes = [];
       this.activeVFX = [];
@@ -1656,7 +1994,7 @@ export class ArchRenderer3D {
     this.camera.updateProjectionMatrix();
   }
 
-  /** Reconstruye la geometría 3D del calabozo cuando se carga un nuevo piso */
+  /** Reconstruye la geometría 3D del calabozo o del mundo exterior vivo */
   buildDungeon(dungeon) {
     if (!this.enabled || !dungeon) return;
 
@@ -1669,6 +2007,10 @@ export class ArchRenderer3D {
     this.enemyMeshes.clear();
     this.chestMeshes.clear();
     this.tileMeshes = [];
+    this.waterMeshes = [];
+    this.sceneryPropMeshes = [];
+    this.critterMeshes = [];
+    this.boatMeshes = [];
     this.shrineGroup = null;
     this.npcGroup = null;
 
@@ -1694,76 +2036,406 @@ export class ArchRenderer3D {
       this.activeVFX = [];
     }
 
-    const { width, height, grid, biome } = dungeon;
-    const floorGeo = new THREE.BoxGeometry(0.98, 0.12, 0.98);
+    const { width, height, grid, biome, isOverworld, isFinalFloor, terrain, elevation } = dungeon;
+
+    // Atmósfera e iluminación según Nivel 1 (Sol mediterráneo) vs Inframundo / Trono Piso 22
+    if (isOverworld) {
+      this.renderer?.setClearColor?.(0x163954, 1);
+      this.ambientLight.color.set(0xe0f2fe);
+      this.ambientLight.intensity = 1.45;
+      this.dirLight.color.set(0xfffbeb);
+      this.dirLight.intensity = 1.95;
+      this.heroLight.intensity = 1.1;
+    } else if (isFinalFloor) {
+      this.renderer?.setClearColor?.(0x0c0614, 1);
+      this.ambientLight.color.set(0xa78bfa);
+      this.ambientLight.intensity = 1.05;
+      this.dirLight.color.set(0xfde68a);
+      this.dirLight.intensity = 1.45;
+      this.heroLight.intensity = 2.0;
+    } else {
+      this.renderer?.setClearColor?.(0x07090f, 1);
+      this.ambientLight.color.set(0x8b9bb4);
+      this.ambientLight.intensity = 0.95;
+      this.dirLight.color.set(0xfef3c7);
+      this.dirLight.intensity = 1.35;
+      this.heroLight.intensity = 1.8;
+    }
+
+    const matCache = new Map();
+    const dimRatio = isOverworld ? 0.72 : 0.35;
+    const getMatPair = (key, color, opts = {}) => {
+      if (matCache.has(key)) return matCache.get(key);
+      const lit = mat(color, opts);
+      const dim = mat(new THREE.Color(color).multiplyScalar(dimRatio), {
+        ...opts,
+        emissive: opts.emissive ? new THREE.Color(opts.emissive).multiplyScalar(0.35) : 0x000000,
+      });
+      const pair = { lit, dim };
+      matCache.set(key, pair);
+      return pair;
+    };
+
+    const assignPairedMesh = (geo, key, color, opts = {}) => {
+      const pair = getMatPair(key, color, opts);
+      const mesh = new THREE.Mesh(geo, pair.lit);
+      mesh.userData.matPair = pair;
+      return mesh;
+    };
+
+    const floorGeo = new THREE.BoxGeometry(0.99, 0.14, 0.99);
+    const overworldBlockGeo = new THREE.BoxGeometry(1.002, 0.34, 1.002);
     const wallGeo = new THREE.BoxGeometry(0.98, 0.72, 0.98);
+    const cliffGeo = new THREE.BoxGeometry(1.002, 0.68, 1.002);
+    const cliffCapGeo = new THREE.BoxGeometry(1.01, 0.09, 1.01);
+    const waterGeo = new THREE.BoxGeometry(1.002, 0.22, 1.002);
+    const tuftGeo = new THREE.ConeGeometry(0.036, 0.14, 4);
+    const pebbleGeo = new THREE.BoxGeometry(0.09, 0.03, 0.08);
+    const bridgeRailGeo = new THREE.BoxGeometry(0.14, 0.14, 0.98);
     const pillarGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.82, 8);
+
+    const grassShades = [0x3d7d36, 0x45883c, 0x377130];
+    const meadowShades = [0x4c9a41, 0x58ab49, 0x62b652];
+    const dirtShades = [0x9c7248, 0x8c633b, 0xa87d53];
+    const sandShades = [0xe2c275, 0xd8b460, 0xebd087];
 
     for (let y = 0; y < height; y++) {
       this.tileMeshes[y] = [];
       for (let x = 0; x < width; x++) {
         const t = grid[y][x];
+        const tKind = isOverworld ? terrain?.[y]?.[x] || 'grass' : null;
+        const elev = isOverworld ? elevation?.[y]?.[x] || 0 : 0;
+        const hash = ((x * 73856093) ^ (y * 19349663)) & 255;
         let tileObj;
 
-        if (t === TILE_WALL) {
-          const wallMat = mat(biome.wall, { roughness: 0.85, metalness: 0.12 });
-          // Alternar muros macizos y columnas dóricas en los bordes
-          const isCornerColumn = (x + y) % 5 === 0;
-          if (isCornerColumn) {
-            tileObj = new THREE.Group();
-            const base = new THREE.Mesh(wallGeo, wallMat);
-            base.position.y = 0.36;
-            const col = new THREE.Mesh(pillarGeo, mat(0x64748b, { roughness: 0.7 }));
-            col.position.y = 0.45;
-            tileObj.add(base, col);
-          } else {
-            tileObj = new THREE.Mesh(wallGeo, wallMat);
-            tileObj.position.y = 0.36;
-          }
-          enableShadows(tileObj, true, true);
-        } else {
-          const color =
-            t === TILE_STAIRS ? 0x422006 : t === TILE_SHRINE ? 0x164e63 : biome.floor;
-          const floorMat = mat(color, { roughness: 0.88, metalness: 0.08 });
-          tileObj = new THREE.Mesh(floorGeo, floorMat);
-          tileObj.position.y = -0.06;
-          tileObj.receiveShadow = true;
+        if (isOverworld) {
+          if (tKind === 'water') {
+            // Agua profunda del Río Aqueronte / Mar Egeo con ondulación animada
+            const waterGroup = new THREE.Group();
+            const waterMesh = assignPairedMesh(waterGeo, 'water-deep', 0x0284c7, {
+              roughness: 0.12,
+              metalness: 0.35,
+              emissive: 0x0369a1,
+              emissiveIntensity: 0.34,
+              transparent: true,
+              opacity: 0.92,
+            });
+            waterMesh.position.y = -0.24;
+            waterMesh.receiveShadow = true;
+            waterGroup.add(waterMesh);
+            this.waterMeshes.push({ mesh: waterMesh, baseY: -0.24, x, y, shallow: false });
+            tileObj = waterGroup;
+          } else if (tKind === 'shallow_water') {
+            // Orilla poco profunda vadeable: arena sumergida + agua turquesa traslúcida
+            const shallowGroup = new THREE.Group();
+            const sandBed = assignPairedMesh(overworldBlockGeo, 'sand-bed', 0xcfa655, { roughness: 0.9, metalness: 0.05 });
+            sandBed.position.y = -0.28;
+            sandBed.receiveShadow = true;
+            const waterTop = assignPairedMesh(waterGeo, 'water-shallow', 0x38bdf8, {
+              roughness: 0.08,
+              metalness: 0.25,
+              emissive: 0x0284c7,
+              emissiveIntensity: 0.24,
+              transparent: true,
+              opacity: 0.65,
+            });
+            waterTop.position.y = -0.13;
+            shallowGroup.add(sandBed, waterTop);
+            this.waterMeshes.push({ mesh: waterTop, baseY: -0.13, x, y, shallow: true });
+            tileObj = shallowGroup;
+          } else if (tKind === 'bridge') {
+            // Puente de piedra y madera sobre agua del río
+            const bridgeGroup = new THREE.Group();
+            const underWater = assignPairedMesh(waterGeo, 'water-deep', 0x0284c7, {
+              roughness: 0.15,
+              metalness: 0.35,
+              emissive: 0x0369a1,
+              emissiveIntensity: 0.28,
+              transparent: true,
+              opacity: 0.88,
+            });
+            underWater.position.y = -0.26;
+            this.waterMeshes.push({ mesh: underWater, baseY: -0.26, x, y, shallow: false });
 
-          if (t === TILE_STAIRS) {
-            const stairsGroup = new THREE.Group();
-            stairsGroup.add(tileObj);
-            const archMat = mat(0xfacc15, { metalness: 0.7, roughness: 0.3, emissive: 0x713f12, emissiveIntensity: 0.4 });
-            for (const sx of [-0.32, 0.32]) {
-              const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.55, 7), archMat);
-              post.position.set(sx, 0.27, 0);
-              stairsGroup.add(post);
+            const deck = assignPairedMesh(floorGeo, 'bridge-deck', 0x9a7b56, { roughness: 0.78, metalness: 0.1 });
+            deck.position.y = -0.01;
+            deck.receiveShadow = true;
+            bridgeGroup.add(underWater, deck);
+
+            if (terrain?.[y - 1]?.[x] === 'water') {
+              const railN = assignPairedMesh(bridgeRailGeo, 'bridge-rail', 0x94a3b8, { roughness: 0.7 });
+              railN.rotation.y = Math.PI / 2;
+              railN.position.set(0, 0.1, -0.42);
+              bridgeGroup.add(railN);
             }
-            const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.08, 0.14), archMat);
-            lintel.position.set(0, 0.56, 0);
-            stairsGroup.add(lintel);
-            tileObj = stairsGroup;
-          } else if (t === TILE_SHRINE) {
-            const sGroup = new THREE.Group();
-            sGroup.add(tileObj);
-            const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.24, 8), mat(0x94a3b8, { roughness: 0.5 }));
-            ped.position.y = 0.12;
-            const crystal = new THREE.Mesh(
-              new THREE.OctahedronGeometry(0.16, 0),
-              mat(0x38bdf8, { emissive: 0x0284c7, emissiveIntensity: 1.1 })
-            );
-            crystal.position.y = 0.44;
-            sGroup.add(ped, crystal);
-            sGroup.userData.crystal = crystal;
-            this.shrineGroup = sGroup;
-            tileObj = sGroup;
+            if (terrain?.[y + 1]?.[x] === 'water') {
+              const railS = assignPairedMesh(bridgeRailGeo, 'bridge-rail', 0x94a3b8, { roughness: 0.7 });
+              railS.rotation.y = Math.PI / 2;
+              railS.position.set(0, 0.1, 0.42);
+              bridgeGroup.add(railS);
+            }
+            enableShadows(bridgeGroup, true, true);
+            tileObj = bridgeGroup;
+          } else if (t === TILE_WALL && tKind === 'cliff') {
+            // Riscos y colinas naturales con tapa de césped o basalto
+            const cliffGroup = new THREE.Group();
+            const rockMesh = assignPairedMesh(cliffGeo, 'cliff-rock', 0x6b5e50, { roughness: 0.92, metalness: 0.06 });
+            rockMesh.position.y = 0.24;
+            const capMesh = assignPairedMesh(cliffCapGeo, 'cliff-cap', 0x45883c, { roughness: 0.85, metalness: 0.04 });
+            capMesh.position.y = 0.61;
+            cliffGroup.add(rockMesh, capMesh);
+            enableShadows(cliffGroup, true, true);
+            tileObj = cliffGroup;
+          } else {
+            // Suelos naturales en superficie: pasto, pradera, tierra, arena, mármol, roca o bosque
+            const idx3 = hash % 3;
+            let color = grassShades[idx3];
+            let key = `grass-${idx3}`;
+            let rough = 0.88;
+            let metal = 0.05;
+            let yOffset = -0.07 + elev;
+
+            if (tKind === 'meadow' || tKind === 'forest') {
+              color = tKind === 'forest' ? 0x35692e : meadowShades[idx3];
+              key = tKind === 'forest' ? 'forest-turf' : `meadow-${idx3}`;
+            } else if (tKind === 'dirt') {
+              color = dirtShades[idx3];
+              key = `dirt-${idx3}`;
+              rough = 0.95;
+              yOffset = -0.08 + elev * 0.4;
+            } else if (tKind === 'sand') {
+              color = sandShades[idx3];
+              key = `sand-${idx3}`;
+              rough = 0.92;
+            } else if (tKind === 'marble') {
+              color = (x + y) % 2 === 0 ? 0xf1f5f9 : 0xe2e8f0;
+              key = (x + y) % 2 === 0 ? 'marble-a' : 'marble-b';
+              rough = 0.38;
+              metal = 0.14;
+              yOffset = -0.03 + elev;
+            } else if (tKind === 'rock') {
+              color = idx3 === 0 ? 0x44403c : 0x57534e;
+              key = `rock-${idx3}`;
+              rough = 0.9;
+            }
+
+            if (t === TILE_STAIRS) {
+              key = 'tartarus-threshold';
+              color = 0x2e1f27;
+            } else if (t === TILE_SHRINE) {
+              key = 'delfos-shrine-pad';
+              color = 0xe2e8f0;
+            }
+
+            const baseMesh = assignPairedMesh(overworldBlockGeo, key, color, { roughness: rough, metalness: metal });
+            baseMesh.position.y = yOffset - 0.1;
+            baseMesh.receiveShadow = true;
+
+            // Detalles 3D orgánicos de superficie: matas de pasto, piedritas, incrustación dorada
+            if (t === TILE_STAIRS) {
+              // Entrada megalítica al Inframundo (Fauces del Tártaro)
+              const caveGroup = new THREE.Group();
+              caveGroup.add(baseMesh);
+              const stoneMatKey = 'cave-arch-stone';
+              for (const sx of [-0.36, 0.36]) {
+                const post = assignPairedMesh(new THREE.BoxGeometry(0.18, 0.72, 0.24), stoneMatKey, 0x3f3a47, { roughness: 0.85 });
+                post.position.set(sx, 0.36, 0);
+                const brazier = assignPairedMesh(
+                  new THREE.OctahedronGeometry(0.08, 0),
+                  'cave-fire',
+                  0xf97316,
+                  { emissive: 0xea580c, emissiveIntensity: 1.5 }
+                );
+                brazier.position.set(sx, 0.78, 0);
+                caveGroup.add(post, brazier);
+              }
+              const lintel = assignPairedMesh(new THREE.BoxGeometry(0.94, 0.16, 0.3), stoneMatKey, 0x3f3a47, { roughness: 0.85 });
+              lintel.position.set(0, 0.72, 0);
+              const portalCore = assignPairedMesh(
+                new THREE.PlaneGeometry(0.56, 0.58),
+                'cave-portal',
+                0x3b0764,
+                { emissive: 0x7e22ce, emissiveIntensity: 1.2, side: THREE.DoubleSide }
+              );
+              portalCore.position.set(0, 0.34, -0.02);
+              caveGroup.add(lintel, portalCore);
+              tileObj = caveGroup;
+            } else if (t === TILE_SHRINE) {
+              const sGroup = new THREE.Group();
+              sGroup.add(baseMesh);
+              const ped = assignPairedMesh(
+                new THREE.CylinderGeometry(0.24, 0.3, 0.28, 10),
+                'shrine-ped',
+                0xf1f5f9,
+                { roughness: 0.4 }
+              );
+              ped.position.y = 0.14;
+              const crystal = new THREE.Mesh(
+                new THREE.OctahedronGeometry(0.16, 0),
+                mat(0x38bdf8, { emissive: 0x0284c7, emissiveIntensity: 1.15 })
+              );
+              crystal.position.y = 0.48;
+              sGroup.add(ped, crystal);
+              sGroup.userData.crystal = crystal;
+              this.shrineGroup = sGroup;
+              tileObj = sGroup;
+            } else if ((tKind === 'grass' || tKind === 'meadow') && (hash & 3) === 0) {
+              const tuftGroup = new THREE.Group();
+              tuftGroup.add(baseMesh);
+              for (let ti = 0; ti < 2; ti++) {
+                const blade = assignPairedMesh(tuftGeo, 'grass-tuft', 0x65a30d, { roughness: 0.85 });
+                blade.position.set(((ti === 0 ? -1 : 1) * ((hash >> 2) % 3) * 0.12), yOffset + 0.11, ((hash >> 4) % 3 - 1) * 0.14);
+                blade.rotation.z = (ti === 0 ? 1 : -1) * 0.18;
+                tuftGroup.add(blade);
+              }
+              tileObj = tuftGroup;
+            } else if (tKind === 'dirt' && (hash & 7) === 1) {
+              const dirtGroup = new THREE.Group();
+              dirtGroup.add(baseMesh);
+              const peb = assignPairedMesh(pebbleGeo, 'dirt-pebble', 0x78716c, { roughness: 0.9 });
+              peb.position.set(((hash % 5) - 2) * 0.12, yOffset + 0.08, (((hash >> 3) % 5) - 2) * 0.1);
+              peb.rotation.y = hash * 0.3;
+              dirtGroup.add(peb);
+              tileObj = dirtGroup;
+            } else {
+              tileObj = baseMesh;
+            }
+          }
+        } else {
+          // Pisos 2–22+: Geometría de mazmorras del Inframundo
+          if (t === TILE_WALL) {
+            const wallKey = `wall-${biome.id}`;
+            const isCornerColumn = (x + y) % 5 === 0;
+            if (isCornerColumn) {
+              tileObj = new THREE.Group();
+              const base = assignPairedMesh(wallGeo, wallKey, biome.wall, { roughness: 0.85, metalness: 0.12 });
+              base.position.y = 0.36;
+              const col = assignPairedMesh(pillarGeo, `col-${biome.id}`, isFinalFloor ? 0x7e22ce : 0x64748b, { roughness: 0.6 });
+              col.position.y = 0.45;
+              tileObj.add(base, col);
+            } else {
+              tileObj = assignPairedMesh(wallGeo, wallKey, biome.wall, { roughness: 0.85, metalness: 0.12 });
+              tileObj.position.y = 0.36;
+            }
+            enableShadows(tileObj, true, true);
+          } else {
+            const floorKey =
+              t === TILE_STAIRS
+                ? 'floor-stairs'
+                : t === TILE_STAIRS_UP
+                ? 'floor-stairs-up'
+                : t === TILE_SHRINE
+                ? 'floor-shrine'
+                : `floor-${biome.id}`;
+            const color =
+              t === TILE_STAIRS
+                ? 0x422006
+                : t === TILE_STAIRS_UP
+                ? 0x0f2942
+                : t === TILE_SHRINE
+                ? 0x164e63
+                : biome.floor;
+            tileObj = assignPairedMesh(floorGeo, floorKey, color, { roughness: 0.88, metalness: 0.08 });
+            tileObj.position.y = -0.06;
+            tileObj.receiveShadow = true;
+
+            const addStairsArch = (group, archKey, archColor, archEmissive, emissiveIntensity, zPos = 0, height = 0.55) => {
+              const archOpts = { metalness: 0.7, roughness: 0.3, emissive: archEmissive, emissiveIntensity };
+              for (const sx of [-0.32, 0.32]) {
+                const post = assignPairedMesh(new THREE.CylinderGeometry(0.06, 0.08, height, 7), archKey, archColor, archOpts);
+                post.position.set(sx, height / 2, zPos);
+                group.add(post);
+              }
+              const lintel = assignPairedMesh(new THREE.BoxGeometry(0.78, 0.08, 0.14), archKey, archColor, archOpts);
+              lintel.position.set(0, height + 0.02, zPos);
+              group.add(lintel);
+            };
+
+            if (t === TILE_STAIRS) {
+              const stairsGroup = new THREE.Group();
+              stairsGroup.add(tileObj);
+              const archColor = isFinalFloor ? 0xa855f7 : 0xfacc15;
+              const archEmissive = isFinalFloor ? 0x7e22ce : 0x713f12;
+              const archKey = isFinalFloor ? 'stairs-arch-final' : 'stairs-arch';
+              addStairsArch(stairsGroup, archKey, archColor, archEmissive, isFinalFloor ? 0.9 : 0.4);
+              tileObj = stairsGroup;
+            } else if (t === TILE_STAIRS_UP) {
+              const upGroup = new THREE.Group();
+              upGroup.add(tileObj);
+              for (const st of [
+                { z: 0.25, h: 0.12, y: 0.05 },
+                { z: 0.0, h: 0.24, y: 0.11 },
+                { z: -0.25, h: 0.36, y: 0.17 },
+              ]) {
+                const step = assignPairedMesh(
+                  new THREE.BoxGeometry(0.54, st.h, 0.24),
+                  'stairs-up-step',
+                  0x94a3b8,
+                  { roughness: 0.55, metalness: 0.18 }
+                );
+                step.position.set(0, st.y, st.z);
+                upGroup.add(step);
+              }
+              addStairsArch(upGroup, 'stairs-up-arch', 0x38bdf8, 0x0284c7, 0.65, -0.18, 0.62);
+              tileObj = upGroup;
+            } else if (t === TILE_SHRINE) {
+              const sGroup = new THREE.Group();
+              sGroup.add(tileObj);
+              const ped = assignPairedMesh(
+                new THREE.CylinderGeometry(0.22, 0.28, 0.24, 8),
+                'shrine-ped-ug',
+                0x94a3b8,
+                { roughness: 0.5 }
+              );
+              ped.position.y = 0.12;
+              const crystal = new THREE.Mesh(
+                new THREE.OctahedronGeometry(0.16, 0),
+                mat(0x38bdf8, { emissive: 0x0284c7, emissiveIntensity: 1.1 })
+              );
+              crystal.position.y = 0.44;
+              sGroup.add(ped, crystal);
+              sGroup.userData.crystal = crystal;
+              this.shrineGroup = sGroup;
+              tileObj = sGroup;
+            }
           }
         }
 
         tileObj.position.x = x + 0.5;
         tileObj.position.z = y + 0.5;
         tileObj.visible = false;
+        tileObj.userData.lastVis = -1;
         this.dungeonGroup.add(tileObj);
         this.tileMeshes[y][x] = tileObj;
+      }
+    }
+
+    // Vegetación, ruinas de mármol, muelle y barca en el Nivel 1 sobre la tierra
+    if (isOverworld && Array.isArray(dungeon.sceneryProps)) {
+      for (const prop of dungeon.sceneryProps) {
+        const pm = createOverworldProp3D(prop);
+        pm.position.x = prop.x;
+        pm.position.z = prop.y;
+        pm.visible = false;
+        pm.userData.tileX = Math.floor(prop.x);
+        pm.userData.tileY = Math.floor(prop.y);
+        pm.userData.propKind = prop.kind;
+        this.dungeonGroup.add(pm);
+        this.sceneryPropMeshes.push(pm);
+        if (prop.kind === 'boat') {
+          this.boatMeshes.push(pm);
+        }
+      }
+    }
+
+    // Fauna viva en el mundo exterior (mariposas y luciérnagas)
+    if (isOverworld && Array.isArray(dungeon.ambientCritters)) {
+      for (const cr of dungeon.ambientCritters) {
+        const cm = createCritterMesh3D(cr);
+        cm.position.set(cr.x, 0.45, cr.y);
+        cm.visible = false;
+        this.dungeonGroup.add(cm);
+        this.critterMeshes.push(cm);
       }
     }
 
@@ -1788,7 +2460,7 @@ export class ArchRenderer3D {
       this.chestMeshes.set(c, chestGroup);
     }
 
-    // Sibila de Cumas y Hoguera 3D
+    // Sibila de Cumas / Oráculo y Hoguera 3D
     if (dungeon.npc) {
       this.npcGroup = createSibylAndCampfire3D();
       this.npcGroup.position.set(dungeon.npc.x, 0, dungeon.npc.y);
@@ -2542,22 +3214,67 @@ export class ArchRenderer3D {
     this.heroLight.position.set(pos.x, 1.75, pos.y);
     this.heroLight.color.set(HERO_CLASSES[hero.classId]?.color || '#f59e0b');
 
-    // 3. Visibilidad de celdas (Niebla de Guerra)
-    const { width, height, explored } = dungeon;
+    // 3. Visibilidad de celdas (Niebla de Guerra optimizada con matPair)
+    const { width, height, explored, isOverworld } = dungeon;
+    const dimFallback = isOverworld ? 0.72 : 0.35;
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const tileObj = this.tileMeshes[y]?.[x];
         if (!tileObj) continue;
         const vis = explored[y][x];
         tileObj.visible = vis > 0;
-        if (vis > 0) {
-          const dim = vis === 2 ? 1.0 : 0.35;
+        if (vis > 0 && tileObj.userData.lastVis !== vis) {
+          tileObj.userData.lastVis = vis;
+          const dim = vis === 2 ? 1.0 : dimFallback;
           tileObj.traverse((c) => {
-            if (c.isMesh && c.material) {
+            if (c.isMesh && c.userData.matPair) {
+              c.material = vis === 2 ? c.userData.matPair.lit : c.userData.matPair.dim;
+            } else if (c.isMesh && c.material) {
               if (!c.userData.baseColor) c.userData.baseColor = c.material.color.clone();
               c.material.color.copy(c.userData.baseColor).multiplyScalar(dim);
             }
           });
+        }
+      }
+    }
+
+    // 3b. Mundo vivo: olas de agua, vegetación/ruinas, barca y fauna en Nivel 1
+    if (isOverworld) {
+      if (this.waterMeshes) {
+        for (const w of this.waterMeshes) {
+          w.mesh.position.y = w.baseY + Math.sin(now * 2.5 + w.x * 0.65 + w.y * 0.45) * 0.022;
+        }
+      }
+      if (this.sceneryPropMeshes) {
+        for (const pm of this.sceneryPropMeshes) {
+          const vis = explored[pm.userData.tileY]?.[pm.userData.tileX] || 0;
+          pm.visible = vis > 0;
+        }
+      }
+      if (this.boatMeshes) {
+        for (const bm of this.boatMeshes) {
+          if (bm.visible) {
+            bm.position.y = -0.06 + Math.sin(now * 2.1) * 0.025;
+            bm.rotation.z = Math.sin(now * 1.7) * 0.06;
+          }
+        }
+      }
+      if (this.critterMeshes) {
+        for (const cm of this.critterMeshes) {
+          const d = cm.userData;
+          const vis = explored[Math.floor(d.baseY)]?.[Math.floor(d.baseX)] === 2;
+          cm.visible = vis;
+          if (!vis) continue;
+          const t = now * 1.4 + d.phase;
+          cm.position.x = d.baseX + Math.sin(t * 0.9) * 1.1;
+          cm.position.z = d.baseY + Math.cos(t * 0.7) * 1.1;
+          cm.position.y = 0.42 + Math.sin(t * 2.3) * 0.16;
+          if (d.kind === 'butterfly') {
+            const flap = Math.sin(now * 16 + d.phase) * 0.65;
+            d.leftWing.rotation.y = flap;
+            d.rightWing.rotation.y = -flap;
+            cm.rotation.y = Math.atan2(Math.cos(t * 0.9), -Math.sin(t * 0.7));
+          }
         }
       }
     }

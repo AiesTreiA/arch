@@ -34,6 +34,7 @@ export function initArchUi() {
   const gameDrawer = $('gameDrawer');
   const drawerSheet = gameDrawer.querySelector('.drawer-sheet');
   const gameOverModal = $('gameOverModal');
+  const victoryModal = $('victoryModal');
   const toastEl = $('hudToast');
 
   const heroPreview3d = new HeroPreview3D($('heroPreviewCanvas'));
@@ -305,10 +306,24 @@ export function initArchUi() {
     if (!gameOverModal.open) gameOverModal.showModal();
   }
 
+  function openVictoryDialog() {
+    if (gameDrawer.open) gameDrawer.close();
+    const hero = game.hero;
+    if (!hero) return;
+    const completed = (hero.quests || []).filter((q) => q.completed).length;
+    $('victorySummary').textContent =
+      `${hero.name} derrotó a Hades, Soberano del Tártaro, en el Piso ${game.floor} (Nivel ${hero.level} · ${completed}/3 Hazañas · ${hero.gold} dracmas). El Modo Abismo Infinito quedó desbloqueado.`;
+    if (victoryModal && !victoryModal.open) victoryModal.showModal();
+  }
+
   const game = new ArchGame({
     canvas: $('gameCanvas'),
     onHudTick: updateHudTick,
     onEvent(ev) {
+      if (ev.type === 'victory') {
+        openVictoryDialog();
+        return;
+      }
       if (ev.type === 'loot' && ev.item) {
         showToast({
           title: `✦ ${ev.title}`,
@@ -320,21 +335,28 @@ export function initArchUi() {
         });
       } else {
         const color =
-          ev.type === 'levelup'
+          ev.color ||
+          (ev.type === 'levelup'
             ? '#facc15'
             : ev.type === 'quest'
             ? '#4ade80'
             : ev.type === 'shrine'
             ? '#38bdf8'
-            : '#e5b869';
+            : '#e5b869');
         showToast({ title: ev.title, message: ev.message, color, duration: 4000 });
       }
     },
     onUiUpdate(state) {
       lastUiState = state;
-      const { hero, derived, classDef, floor, biome, log, skills } = state;
+      const { hero, derived, classDef, floor, finalFloor = 22, isOverworld, currentZone, biome, log, skills } = state;
 
-      $('floorLabel').textContent = `Piso ${floor} · ${biome}`;
+      if (isOverworld) {
+        $('floorLabel').textContent = `Tierra 1/${finalFloor} · ${currentZone || biome}`;
+      } else if (floor <= finalFloor) {
+        $('floorLabel').textContent = `Piso ${floor}/${finalFloor} · ${biome}`;
+      } else {
+        $('floorLabel').textContent = `Abismo ${floor} · ${biome}`;
+      }
       $('heroTitle').textContent = `${hero.name}`;
       $('heroLevelBadge').textContent = `Nv.${hero.level}`;
       $('heroCrest').style.background = classDef.color;
@@ -448,29 +470,47 @@ export function initArchUi() {
       // Pestaña Oráculos y Crónica
       const questsBox = $('questsBox');
       questsBox.innerHTML = '';
-      for (const q of hero.quests || []) {
+      const appendQuestCard = ({ title, completed, progressText, desc, rewardText }) => {
         const qDiv = document.createElement('div');
-        qDiv.className = `quest-card ${q.completed ? 'is-done' : ''}`;
+        qDiv.className = `quest-card ${completed ? 'is-done' : ''}`;
         const qTop = document.createElement('div');
         qTop.className = 'quest-top';
         const qTitle = document.createElement('strong');
-        qTitle.textContent = q.title;
+        qTitle.textContent = title;
         const qBadge = document.createElement('span');
         qBadge.className = 'quest-badge';
-        qBadge.textContent = q.completed ? '✔ Cumplida' : `${q.progress}/${q.targetCount}`;
+        qBadge.textContent = completed ? '✔ Cumplida' : progressText;
         qTop.append(qTitle, qBadge);
 
         const qDesc = document.createElement('div');
         qDesc.className = 'quest-desc';
-        qDesc.textContent = q.desc;
+        qDesc.textContent = desc;
 
         const qReward = document.createElement('div');
         qReward.className = 'quest-reward';
-        qReward.textContent = `Don: ${q.rewardText}`;
+        qReward.textContent = rewardText;
 
         qDiv.append(qTop, qDesc, qReward);
         questsBox.appendChild(qDiv);
+      };
+
+      for (const q of hero.quests || []) {
+        appendQuestCard({
+          title: q.title,
+          completed: q.completed,
+          progressText: `${q.progress}/${q.targetCount}`,
+          desc: q.desc,
+          rewardText: `Don: ${q.rewardText}`,
+        });
       }
+
+      appendQuestCard({
+        title: `IV. Trono del Tártaro (Piso ${finalFloor})`,
+        completed: Boolean(state.finalBossDefeated),
+        progressText: `Piso ${Math.min(floor, finalFloor)}/${finalFloor}`,
+        desc: 'Desciende desde la Tierra (Piso 1) hasta el Piso 22 y derrota a Hades, Soberano del Tártaro.',
+        rewardText: 'Don: Victoria Olímpica + Reliquia Única Divina + Modo Abismo Infinito',
+      });
 
       const logBox = $('logBox');
       logBox.innerHTML = '';
@@ -646,6 +686,7 @@ export function initArchUi() {
   function launchRun({ withFullscreen = false } = {}) {
     if (startModal.open) startModal.close();
     if (gameOverModal.open) gameOverModal.close();
+    if (victoryModal?.open) victoryModal.close();
     if (withFullscreen) {
       fullscreenCtrl.enter({ lockLandscape: true });
     }
@@ -677,6 +718,25 @@ export function initArchUi() {
     if (!startModal.open) startModal.showModal();
   };
   $('btnGameOverRetry').onclick = () => launchRun({ withFullscreen: fullscreenCtrl.isActive() });
+
+  if ($('btnVictoryBonfire')) {
+    $('btnVictoryBonfire').onclick = () => {
+      if (victoryModal?.open) victoryModal.close();
+      $('btnCancelStart').hidden = true;
+      if (!startModal.open) startModal.showModal();
+    };
+  }
+  if ($('btnVictoryEndless')) {
+    $('btnVictoryEndless').onclick = () => {
+      if (victoryModal?.open) victoryModal.close();
+      showToast({
+        title: '🌌 Modo Abismo Infinito',
+        message: 'Recoge tu botín divino y cruza el portal del Tártaro [F] hacia el Piso 23.',
+        color: '#a855f7',
+        duration: 5000,
+      });
+    };
+  }
 
   // Aviso de orientación vertical en móvil
   const dismissPortraitHint = $('btnDismissRotateHint');

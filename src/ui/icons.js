@@ -33,7 +33,8 @@ export const INTERACT_ICONS = {
   npc: svgWrap('<circle cx="12" cy="12" r="4"/><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/>'),
   chest: svgWrap('<rect x="4" y="8" width="16" height="11" rx="2"/><path d="M4 12h16M12 10v4"/>'),
   shrine: svgWrap('<path d="m12 3 5 9-5 9-5-9 5-9Z"/><path d="M7 12h10"/>'),
-  stairs: svgWrap('<path d="M4 18h4v-4h4v-4h4V6h4"/>'),
+  stairs: svgWrap('<path d="M4 18h4v-4h4v-4h4V6h4"/><path d="M17 13v5m0 0-2-2m2 2 2-2"/>'),
+  stairsUp: svgWrap('<path d="M4 18h4v-4h4v-4h4V6h4"/><path d="M7 11V6m0 0-2 2m2-2 2 2"/>'),
   default: svgWrap('<circle cx="12" cy="12" r="7"/><path d="M12 9v6M9 12h6"/>'),
 };
 
