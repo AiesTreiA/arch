@@ -151,7 +151,20 @@ export function createItemsPanelController({ equipRoot, invRoot, game }) {
       return compareItems(it, eq, hero.classId).verdict === 'worse';
     }).length;
 
+    const isAutoActive = Boolean(state.autoManageEnabled ?? game.autoManageEnabled);
     const quickActions = el('div', 'inv-quick-actions');
+
+    const autoModeBtn = el(
+      'button',
+      `btn-quick-action btn-auto-mode ${isAutoActive ? 'is-active' : ''}`
+    );
+    autoModeBtn.type = 'button';
+    autoModeBtn.id = 'btnToggleAutoManage';
+    autoModeBtn.setAttribute('aria-pressed', isAutoActive ? 'true' : 'false');
+    autoModeBtn.title =
+      'Auto-equipa objetos mejores, auto-ofrenda inferiores al recogerlos y auto-asigna atributos y talentos al azar';
+    autoModeBtn.innerHTML = `${UI_ICONS.autoMode || ''}<span>Modo Auto: ${isAutoActive ? 'ACTIVO' : 'OFF'}</span>`;
+    autoModeBtn.onclick = () => game.toggleAutoManage();
 
     const autoEquipBtn = el(
       'button',
@@ -177,9 +190,18 @@ export function createItemsPanelController({ equipRoot, invRoot, game }) {
     sortBtn.innerHTML = `${UI_ICONS.sort}<span>Ordenar</span>`;
     sortBtn.onclick = () => game.sortInventory();
 
-    quickActions.append(autoEquipBtn, salvageAllBtn, sortBtn);
+    quickActions.append(autoModeBtn, autoEquipBtn, salvageAllBtn, sortBtn);
     toolbar.append(filterGroup, quickActions);
     invRoot.appendChild(toolbar);
+
+    if (isAutoActive) {
+      const banner = el(
+        'div',
+        'auto-mode-banner',
+        '⚡ Modo Auto ACTIVO: se auto-equipan objetos mejores, se auto-ofrendan inferiores al recogerlos y se reparten atributos y talentos al azar.'
+      );
+      invRoot.appendChild(banner);
+    }
 
     const visibleItems =
       activeFilter === 'all' ? inventory : inventory.filter((i) => i.slot === activeFilter);

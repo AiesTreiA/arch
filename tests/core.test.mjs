@@ -706,6 +706,71 @@ test('pisos 2+ generan escaleras de ascenso (TILE_STAIRS_UP) conectadas y permit
   }
 });
 
+test('Modo Auto auto-equipa objetos mejores, auto-ofrenda inferiores al recogerlos y asigna atributos/talentos con random', async () => {
+  const { ArchGame } = await import('../src/game/engine.js');
+  const hero = createHero('campeon');
+  hero.statPoints = 6;
+  hero.skillPoints = 3;
+
+  const initialStatsSum = Object.values(hero.baseStats).reduce((a, b) => a + b, 0);
+  const initialTreesSum = hero.treePoints.reduce((a, b) => a + b, 0);
+
+  const mockGame = {
+    hero,
+    pos: { x: 4, y: 4 },
+    autoManageEnabled: false,
+    addFloater: () => {},
+    addLog: () => {},
+    _notify: () => {},
+    equipItem: ArchGame.prototype.equipItem,
+    autoEquipBest: ArchGame.prototype.autoEquipBest,
+    salvageInferiorItems: ArchGame.prototype.salvageInferiorItems,
+    autoAllocatePointsRandom: ArchGame.prototype.autoAllocatePointsRandom,
+    handleAutoItemPickup: ArchGame.prototype.handleAutoItemPickup,
+    toggleAutoManage: ArchGame.prototype.toggleAutoManage,
+  };
+
+  // 1. Activar Modo Auto reparte inmediatamente atributos y talentos al azar
+  const active = mockGame.toggleAutoManage(true);
+  assert.equal(active, true);
+  assert.equal(hero.statPoints, 0, 'Todos los puntos de atributo deben distribuirse automáticamente');
+  assert.equal(hero.skillPoints, 0, 'Todos los puntos de talento deben distribuirse automáticamente');
+  assert.equal(
+    Object.values(hero.baseStats).reduce((a, b) => a + b, 0),
+    initialStatsSum + 6,
+    'La suma de atributos debe aumentar en 6'
+  );
+  assert.equal(
+    hero.treePoints.reduce((a, b) => a + b, 0),
+    initialTreesSum + 3,
+    'La suma de talentos debe aumentar en 3'
+  );
+
+  // 2. Recoger un arma superior del suelo debe auto-equiparla
+  const weakWeapon = generateItem({ level: 1, forceRarity: 'common', preferredClass: 'campeon', seed: 'w-weak' });
+  weakWeapon.slot = 'weapon';
+  const strongWeapon = generateItem({ level: 8, forceRarity: 'unique', preferredClass: 'campeon', seed: 'w-strong' });
+  strongWeapon.slot = 'weapon';
+
+  const r1 = mockGame.handleAutoItemPickup(weakWeapon);
+  assert.equal(r1.action, 'equipped', 'Si la ranura estaba vacía, debe auto-equipar el arma recogida');
+  assert.equal(hero.equipment.weapon.id, weakWeapon.id);
+
+  const goldBeforeUpgrade = hero.gold;
+  const r2 = mockGame.handleAutoItemPickup(strongWeapon);
+  assert.equal(r2.action, 'equipped', 'Al recoger un arma superior, debe auto-equiparla');
+  assert.equal(hero.equipment.weapon.id, strongWeapon.id);
+  assert.ok(hero.gold > goldBeforeUpgrade, 'El arma anterior inferior debe auto-ofrendarse por dracmas');
+
+  // 3. Recoger un arma inferior debe auto-ofrendarla sin ocupar la mochila
+  const goldBeforeInferior = hero.gold;
+  const r3 = mockGame.handleAutoItemPickup(weakWeapon);
+  assert.equal(r3.action, 'salvaged', 'Un objeto inferior recogido debe auto-ofrendarse inmediatamente');
+  assert.ok(hero.gold > goldBeforeInferior, 'Auto-ofrendar al recoger debe sumar dracmas');
+  assert.equal(hero.inventory.length, 0, 'El objeto inferior no debe ocupar espacio en la mochila');
+});
+
+
 
 
 

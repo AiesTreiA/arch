@@ -70,6 +70,11 @@ export class ArchGame {
     this.endlessUnlocked = false;
     this.currentZoneId = null;
     this.discoveredZones = new Set();
+    try {
+      this.autoManageEnabled = typeof localStorage !== 'undefined' && localStorage.getItem('arch_auto_manage') === '1';
+    } catch {
+      this.autoManageEnabled = false;
+    }
     this.lastTs = 0;
     this.lastDt = 0.016;
     this.attackCdLeft = 0;
@@ -472,9 +477,11 @@ export class ArchGame {
     this._notify();
   }
 
-  autoEquipBest() {
+  autoEquipBest({ silentIfNone = false } = {}) {
     if (!this.hero || !this.hero.inventory || this.hero.inventory.length === 0) {
-      this.addFloater(this.pos.x, this.pos.y, 'Mochila vacía', '#94a3b8');
+      if (!silentIfNone) {
+        this.addFloater(this.pos.x, this.pos.y, 'Mochila vacía', '#94a3b8');
+      }
       return 0;
     }
 
@@ -506,7 +513,7 @@ export class ArchGame {
     if (equippedCount > 0) {
       this.addFloater(this.pos.x, this.pos.y, `¡Equipado lo superior! (+${equippedCount})`, '#4ade80');
       this.addLog(`Auto-equipado: se equiparon ${equippedCount} objeto(s) superior(es).`);
-    } else {
+    } else if (!silentIfNone) {
       this.addFloater(this.pos.x, this.pos.y, 'Ya tienes tu mejor equipo', '#94a3b8');
       this.addLog('Ya tienes equipado el mejor equipo disponible en tu mochila.');
     }
@@ -514,9 +521,11 @@ export class ArchGame {
     return equippedCount;
   }
 
-  salvageInferiorItems() {
+  salvageInferiorItems({ silentIfNone = false } = {}) {
     if (!this.hero || !this.hero.inventory || this.hero.inventory.length === 0) {
-      this.addFloater(this.pos.x, this.pos.y, 'Mochila vacía', '#94a3b8');
+      if (!silentIfNone) {
+        this.addFloater(this.pos.x, this.pos.y, 'Mochila vacía', '#94a3b8');
+      }
       return { count: 0, goldGain: 0 };
     }
 
@@ -524,14 +533,18 @@ export class ArchGame {
     for (const item of this.hero.inventory) {
       const equipped = this.hero.equipment[item.slot];
       const cmp = compareItems(item, equipped, this.hero.classId);
-      if (cmp.verdict === 'worse') {
+      const isStrictlyLower =
+        equipped && getItemPowerScore(item, this.hero.classId) < getItemPowerScore(equipped, this.hero.classId);
+      if (cmp.verdict === 'worse' || isStrictlyLower) {
         toSalvage.push(item);
       }
     }
 
     if (toSalvage.length === 0) {
-      this.addFloater(this.pos.x, this.pos.y, 'Sin objetos inferiores', '#94a3b8');
-      this.addLog('No tienes objetos inferiores para ofrendar.');
+      if (!silentIfNone) {
+        this.addFloater(this.pos.x, this.pos.y, 'Sin objetos inferiores', '#94a3b8');
+        this.addLog('No tienes objetos inferiores para ofrendar.');
+      }
       return { count: 0, goldGain: 0 };
     }
 
@@ -550,6 +563,155 @@ export class ArchGame {
     this.addLog(`Ofrendaste ${toSalvage.length} objeto(s) inferior(es) por ${totalGold} dracmas.`);
     this._notify();
     return { count: toSalvage.length, goldGain: totalGold };
+  }
+
+  /**
+   * Distribuye automáticamente todos los puntos de atributo y de talento disponibles
+   * utilizando una función aleatoria (Math.random por defecto).
+   */
+  autoAllocatePointsRandom({ rng = Math.random, silent = false } = {}) {
+    if (!this.hero) return { statsAllocated: 0, skillsAllocated: 0 };
+
+    const statKeys = ['strength', 'dexterity', 'spirit', 'vitality'];
+    const statLabels = {
+      strength: 'Fuerza',
+      dexterity: 'Destreza',
+      spirit: 'Espíritu',
+      vitality: 'Vitalidad',
+    };
+    let statsAllocated = 0;
+    const statCounts = {};
+
+    while ((this.hero.statPoints || 0) > 0) {
+      const idx = Math.max(0, Math.min(statKeys.length - 1, Math.floor(rng() * statKeys.length)));
+      const key = statKeys[idx];
+      this.hero.baseStats[key] = (this.hero.baseStats[key] || 0) + 1;
+      this.hero.statPoints -= 1;
+      statsAllocated++;
+      statCounts[key] = (statCounts[key] || 0) + 1;
+    }
+
+    const cls = HERO_CLASSES[this.hero.classId] || HERO_CLASSES.hoplita;
+    const numTrees = (cls.trees || []).length || 3;
+    let skillsAllocated = 0;
+    const skillCounts = {};
+
+    while ((this.hero.skillPoints || 0) > 0) {
+      const treeIdx = Math.max(0, Math.min(numTrees - 1, Math.floor(rng() * numTrees)));
+      if (!allocateSkillPoint(this.hero, treeIdx)) break;
+      skillsAllocated++;
+      const branchName = cls.trees[treeIdx] || `Rama ${treeIdx + 1}`;
+      skillCounts[branchName] = (skillCounts[branchName] || 0) + 1;
+    }
+
+    if (statsAllocated > 0 || skillsAllocated > 0) {
+      const derived = computeHeroDerived(this.hero);
+      this.hero.hp = Math.min(derived.maxHp, this.hero.hp + statsAllocated * 5 + skillsAllocated * 6);
+      this.hero.mana = Math.min(derived.maxMana, this.hero.mana + (statsAllocated + skillsAllocated) * 4);
+
+      if (!silent) {
+        const statParts = Object.entries(statCounts).map(([k, n]) => `+${n} ${statLabels[k]}`);
+        const skillParts = Object.entries(skillCounts).map(([b, n]) => `+${n} ${b}`);
+        const summary = [...statParts, ...skillParts].join(' · ');
+        this.addFloater(this.pos.x, this.pos.y, `🎲 Auto: ${summary}`, '#a855f7');
+        this.addLog(`Auto-asignación (Random): ${summary}.`);
+      }
+      this._notify();
+    }
+
+    return { statsAllocated, skillsAllocated, statCounts, skillCounts };
+  }
+
+  /**
+   * Procesa un objeto recogido del suelo cuando el Modo Automático está activo:
+   *  - Si es mejor que el equipado: lo equipa al instante y ofrenda el anterior inferior por dracmas.
+   *  - Si es inferior al equipado: lo ofrenda al instante por dracmas sin ocupar la mochila.
+   */
+  handleAutoItemPickup(item, dropX = this.pos.x, dropY = this.pos.y) {
+    if (!item || !this.hero) return { action: 'none', goldGain: 0 };
+
+    const slot = item.slot;
+    const equipped = this.hero.equipment[slot];
+    const candScore = getItemPowerScore(item, this.hero.classId);
+    const eqScore = equipped ? getItemPowerScore(equipped, this.hero.classId) : -Infinity;
+    const cmp = compareItems(item, equipped, this.hero.classId);
+
+    if (!equipped || candScore > eqScore) {
+      this.hero.equipment[slot] = item;
+      let goldGain = 0;
+      if (equipped) {
+        goldGain = getItemSalvageValue(equipped);
+        this.hero.gold += goldGain;
+      }
+      const d = computeHeroDerived(this.hero);
+      this.hero.hp = Math.min(d.maxHp, this.hero.hp);
+      this.hero.mana = Math.min(d.maxMana, this.hero.mana);
+
+      if (goldGain > 0) {
+        this.addFloater(dropX, dropY, `⚡ Equipado: ${item.name} (+${goldGain} dracmas)`, '#4ade80', { kind: 'loot' });
+        this.addLog(`Auto-equipado: ${item.name} (anterior ${equipped.name} ofrendado por +${goldGain} dracmas).`);
+      } else {
+        this.addFloater(dropX, dropY, `⚡ Equipado: ${item.name}`, '#4ade80', { kind: 'loot' });
+        this.addLog(`Auto-equipado: ${item.name}.`);
+      }
+
+      // Si quedaron ítems inferiores en ese slot dentro de la mochila, ofrendarlos también
+      this.salvageInferiorItems({ silentIfNone: true });
+      return { action: 'equipped', goldGain };
+    }
+
+    if (cmp.verdict === 'worse' || candScore < eqScore) {
+      const goldGain = getItemSalvageValue(item);
+      this.hero.gold += goldGain;
+      this.addFloater(dropX, dropY, `+${goldGain} dracmas (Ofrenda: ${item.name})`, '#facc15', { kind: 'loot' });
+      this.addLog(`Auto-ofrendado al recoger: ${item.name} (+${goldGain} dracmas).`);
+      return { action: 'salvaged', goldGain };
+    }
+
+    // Si es exactamente equivalente en puntaje
+    if (this.hero.inventory.length < 16) {
+      this.hero.inventory.push(item);
+      this.addFloater(dropX, dropY, item.name, item.color, { kind: 'loot' });
+      this.addLog(`Recogiste: ${item.name}`);
+      return { action: 'stored', goldGain: 0 };
+    }
+
+    const goldGain = getItemSalvageValue(item);
+    this.hero.gold += goldGain;
+    this.addFloater(dropX, dropY, `+${goldGain} dracmas (Ofrenda: ${item.name})`, '#facc15', { kind: 'loot' });
+    this.addLog(`Mochila llena — auto-ofrendado: ${item.name} (+${goldGain} dracmas).`);
+    return { action: 'salvaged', goldGain };
+  }
+
+  /**
+   * Activa o desactiva el Modo Automático de inventario y progresión:
+   *  - Auto-equipa objetos superiores
+   *  - Auto-ofrenda objetos inferiores al recogerlos o de la mochila
+   *  - Auto-asigna atributos y talentos al azar en cuanto aparecen
+   */
+  toggleAutoManage(forceState = null) {
+    this.autoManageEnabled = typeof forceState === 'boolean' ? forceState : !this.autoManageEnabled;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('arch_auto_manage', this.autoManageEnabled ? '1' : '0');
+      }
+    } catch {
+      // Ignorar errores de almacenamiento en entornos restringidos
+    }
+
+    if (this.autoManageEnabled) {
+      this.autoEquipBest({ silentIfNone: true });
+      this.salvageInferiorItems({ silentIfNone: true });
+      this.autoAllocatePointsRandom();
+      this.addFloater(this.pos.x, this.pos.y, '⚡ Modo Auto: ACTIVADO', '#4ade80');
+      this.addLog('Modo Automático ACTIVADO: auto-equipa mejores, auto-ofrenda inferiores y reparte atributos/talentos al azar.');
+    } else {
+      this.addFloater(this.pos.x, this.pos.y, 'Modo Auto: DESACTIVADO', '#94a3b8');
+      this.addLog('Modo Automático DESACTIVADO.');
+    }
+
+    this._notify();
+    return this.autoManageEnabled;
   }
 
   dropInventoryItem(itemId) {
@@ -1305,6 +1467,9 @@ export class ArchGame {
       this.addFloater(gx, gy, '¡Hazaña I Cumplida! +1 Talento', '#facc15');
       this.addLog('Hazaña cumplida: El Antro de los Perjuros (+1 Punto de Talento y +1 Atributo).');
       this.onEvent?.({ type: 'quest', title: 'Hazaña I Cumplida', message: '+1 Punto de Talento y +1 Atributo' });
+      if (this.autoManageEnabled) {
+        this.autoAllocatePointsRandom();
+      }
     } else if (questId === 'obolo_caronte') {
       this.hero.gold += 80;
       const classRare = generateItem({
@@ -1330,6 +1495,9 @@ export class ArchGame {
       this.addFloater(gx, gy, '¡Hazaña III Cumplida! Reliquia Única', '#f97316');
       this.addLog(`Hazaña cumplida: El Guardián del Umbral (+2 Talentos y ${classUnique.name}).`);
       this.onEvent?.({ type: 'quest', title: 'Hazaña III Cumplida', message: `+2 Talentos y ${classUnique.name}` });
+      if (this.autoManageEnabled) {
+        this.autoAllocatePointsRandom();
+      }
     }
   }
 
@@ -1346,6 +1514,9 @@ export class ArchGame {
         title: `¡Nivel ${this.hero.level}!`,
         message: '+3 Atributos y +1 Punto de Talento disponibles',
       });
+      if (this.autoManageEnabled) {
+        this.autoAllocatePointsRandom();
+      }
     }
     this._advanceQuest('antro_perjuros', 1, enemy.x, enemy.y);
     if (enemy.tier === 'boss') {
@@ -1522,7 +1693,11 @@ export class ArchGame {
       }
     }
 
-    // Recoger botín cercano automáticamente (oro/pociones) o ítems si hay espacio
+    if (this.autoManageEnabled && ((this.hero.statPoints || 0) > 0 || (this.hero.skillPoints || 0) > 0)) {
+      this.autoAllocatePointsRandom();
+    }
+
+    // Recoger botín cercano automáticamente (oro/pociones) o ítems si hay espacio (o si Modo Auto está activo)
     for (let i = this.groundDrops.length - 1; i >= 0; i--) {
       const d = this.groundDrops[i];
       if (d.dropCooldown > 0) {
@@ -1540,18 +1715,30 @@ export class ArchGame {
         this.addFloater(d.x, d.y, '+1 Ambrosía', '#f87171', { kind: 'loot' });
         this.groundDrops.splice(i, 1);
         this._notify();
-      } else if (d.kind === 'item' && this.hero.inventory.length < 16) {
-        this.hero.inventory.push(d.item);
-        this.addLog(`Recogiste: ${d.item.name}`);
-        this.addFloater(d.x, d.y, d.item.name, d.item.color, { kind: 'loot' });
-        if (d.item.rarity === 'rare' || d.item.rarity === 'unique') {
-          this.onEvent?.({
-            type: 'loot',
-            title: d.item.rarityLabel,
-            message: d.item.name,
-            color: d.item.color,
-            item: d.item,
-          });
+      } else if (d.kind === 'item' && (this.autoManageEnabled || this.hero.inventory.length < 16)) {
+        if (this.autoManageEnabled) {
+          const res = this.handleAutoItemPickup(d.item, d.x, d.y);
+          if (res.action === 'equipped' && (d.item.rarity === 'rare' || d.item.rarity === 'unique')) {
+            this.onEvent?.({
+              type: 'loot',
+              title: `⚡ ${d.item.rarityLabel} (Auto-Equipado)`,
+              message: d.item.name,
+              color: d.item.color,
+            });
+          }
+        } else {
+          this.hero.inventory.push(d.item);
+          this.addLog(`Recogiste: ${d.item.name}`);
+          this.addFloater(d.x, d.y, d.item.name, d.item.color, { kind: 'loot' });
+          if (d.item.rarity === 'rare' || d.item.rarity === 'unique') {
+            this.onEvent?.({
+              type: 'loot',
+              title: d.item.rarityLabel,
+              message: d.item.name,
+              color: d.item.color,
+              item: d.item,
+            });
+          }
         }
         this.groundDrops.splice(i, 1);
         this._notify();
@@ -2062,6 +2249,7 @@ export class ArchGame {
       zoom: this.zoom,
       gameOver: this.gameOver,
       finalBossDefeated: this.finalBossDefeated,
+      autoManageEnabled: Boolean(this.autoManageEnabled),
     });
   }
 
@@ -2085,6 +2273,7 @@ export class ArchGame {
       gameOver: this.gameOver,
       finalBossDefeated: this.finalBossDefeated,
       endlessUnlocked: this.endlessUnlocked,
+      autoManageEnabled: Boolean(this.autoManageEnabled),
       skills: classDef.skills,
       nearby: this.getNearbyInteractable(),
     });
