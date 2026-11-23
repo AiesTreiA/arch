@@ -6,6 +6,7 @@ import {
   FINAL_FLOOR,
   generateDungeon,
   getZoneAt,
+  isFinalFloorLevel,
   isWalkable,
   TILE_FLOOR,
   TILE_SHRINE,
@@ -24,6 +25,7 @@ import {
   resolveStrike,
 } from '../core/combat.js';
 import { compareItems, generateItem, getItemPowerScore, getItemSalvageValue, rollEnemyDrop } from '../core/loot.js';
+import { archAudio } from './audio.js';
 import { ArchRenderer3D } from './models3d.js';
 
 const TILE_W = 56;
@@ -285,6 +287,10 @@ export class ArchGame {
     this.skillQCd = 0;
     this.skillECd = 0;
     this.attackHeld = false;
+    this.comboStep = 0;
+    this.lastAttackTs = 0;
+    this.hitStopTimer = 0;
+    this.dayTime = 0.22;
     this.joystick = { x: 0, y: 0 };
     this.lastAimDir = { x: 1, y: 0 };
     this.log = [];
@@ -323,7 +329,7 @@ export class ArchGame {
     return { x: anchor.x + 0.5, y: anchor.y + 0.5 };
   }
 
-  _loadFloor(floor, { entry = 'spawn', savePrevious = true } = {}) {
+  _loadFloor(floor, { entry = 'spawn', savePrevious = true, parentFloor = null, isDeadEnd = false } = {}) {
     if (savePrevious && this.dungeon && this.floor != null) {
       this.floorCache?.set(this.floor, {
         dungeon: this.dungeon,
@@ -339,8 +345,18 @@ export class ArchGame {
       this.enemies = cached.enemies;
       this.groundDrops = cached.groundDrops;
     } else {
-      const size = floor === 1 ? 48 : 44;
-      this.dungeon = generateDungeon({ width: size, height: size, level: floor, seed: this.seed });
+      const size = (floor === 1 || floor === 'mundo-2') ? 48 : 44;
+      this.dungeon = generateDungeon({
+        width: size,
+        height: size,
+        level: floor,
+        seed: this.seed,
+        parentFloor,
+        isDeadEnd,
+      });
+      if (parentFloor != null) {
+        this.dungeon.parentFloor = parentFloor;
+      }
       this.groundDrops = [];
       this.enemies = this.dungeon.enemySpawns.map((s, idx) => createEnemy(s, `e-${floor}-${idx}`));
     }
@@ -360,7 +376,7 @@ export class ArchGame {
     this.attackQueued = false;
     this.attackBufferTimer = 0;
 
-    updateVisibility(this.dungeon, this.pos.x, this.pos.y, floor === 1 ? 11 : 8);
+    updateVisibility(this.dungeon, this.pos.x, this.pos.y, (floor === 1 || floor === 'mundo-2') ? 11 : 8);
     const startZone = getZoneAt(this.dungeon, this.pos.x, this.pos.y);
     this.currentZoneId = startZone?.id || null;
     if (startZone) this.discoveredZones.add(startZone.id);
@@ -368,9 +384,22 @@ export class ArchGame {
     this.cam.x = iso.x;
     this.cam.y = iso.y;
     this.renderer3d?.buildDungeon(this.dungeon);
-    const prefix = floor === 1 ? 'Superficie' : floor <= FINAL_FLOOR ? `Piso ${floor}/${FINAL_FLOOR}` : `Abismo ${floor}`;
+    const isFin = isFinalFloorLevel(floor);
+    archAudio.setMusicTheme(isFin ? 'boss' : this.dungeon?.isOverworld ? 'overworld' : 'underworld');
+    const prefix =
+      floor === 'mundo-2'
+        ? 'Mundo II (Celestial)'
+        : floor === 1
+        ? 'Superficie'
+        : isFin
+        ? 'Piso -3 (Trono del Tártaro)'
+        : typeof floor === 'string' && floor.includes('cripta')
+        ? 'Cripta (Sin Salida)'
+        : typeof floor === 'string' && floor.includes('fragua')
+        ? 'Fragua (Sin Salida)'
+        : `Piso ${floor}`;
     this.addLog(`${prefix}: ${this.dungeon.biome.name}.`);
-    if (!cached && floor === FINAL_FLOOR && !this.finalBossDefeated) {
+    if (!cached && isFin && !this.finalBossDefeated) {
       this.addLog('¡Has alcanzado el Trono del Tártaro! Derrota a Hades, Soberano de los Muertos.');
     }
   }
@@ -734,6 +763,7 @@ export class ArchGame {
     const derived = computeHeroDerived(this.hero);
     if (this.hero.hp >= derived.maxHp && this.hero.mana >= derived.maxMana) return;
     this.hero.potions -= 1;
+    archAudio.playLootPickup('potion');
     const heal = Math.round(derived.maxHp * 0.45);
     const manaGain = Math.round(derived.maxMana * 0.35);
     this.hero.hp = Math.min(derived.maxHp, this.hero.hp + heal);
@@ -759,60 +789,98 @@ export class ArchGame {
       }
     }
 
+    if (this.dungeon.fairyFountains) {
+      for (const f of this.dungeon.fairyFountains) {
+        if (!f.visited && Math.hypot(f.x - this.pos.x, f.y - this.pos.y) <= 2.2) {
+          return { kind: 'fairy', label: 'Gran Hada', hint: 'Recibir la Bendición de la Gran Hada', target: f };
+        }
+      }
+    }
+
     const tx = Math.floor(this.pos.x);
     const ty = Math.floor(this.pos.y);
     const curTile = this.dungeon.grid[ty]?.[tx];
-    const distDown = this.dungeon.stairs
-      ? Math.hypot(this.dungeon.stairs.x + 0.5 - this.pos.x, this.dungeon.stairs.y + 0.5 - this.pos.y)
-      : Infinity;
+    const stairsDownList = this.dungeon.stairsList || (this.dungeon.stairs ? [this.dungeon.stairs] : []);
+    let nearestStairsDown = null;
+    let bestDistDown = Infinity;
+    for (const s of stairsDownList) {
+      if (!s) continue;
+      const d = Math.hypot(s.x + 0.5 - this.pos.x, s.y + 0.5 - this.pos.y);
+      if (d < bestDistDown) {
+        bestDistDown = d;
+        nearestStairsDown = s;
+      }
+    }
+
     const distUp = this.dungeon.stairsUp
       ? Math.hypot(this.dungeon.stairsUp.x + 0.5 - this.pos.x, this.dungeon.stairsUp.y + 0.5 - this.pos.y)
       : Infinity;
-    const canDown = Boolean(this.dungeon.stairs) && (curTile === TILE_STAIRS || distDown <= 1.35);
-    const canUp = this.floor > 1 && Boolean(this.dungeon.stairsUp) && (curTile === TILE_STAIRS_UP || distUp <= 1.35);
+    const canDown = Boolean(nearestStairsDown) && (curTile === TILE_STAIRS || bestDistDown <= 1.4);
+    const canUp =
+      Boolean(this.dungeon.stairsUp) &&
+      (curTile === TILE_STAIRS_UP || distUp <= 1.4) &&
+      this.floor !== 1 &&
+      this.floor !== 'mundo-2';
 
     if (canDown || canUp) {
       const preferUp =
-        canUp && (!canDown || curTile === TILE_STAIRS_UP || (curTile !== TILE_STAIRS && distUp < distDown));
+        canUp && (!canDown || curTile === TILE_STAIRS_UP || (curTile !== TILE_STAIRS && distUp < bestDistDown));
       if (preferUp) {
-        const prevFloor = this.floor - 1;
+        const prevFloor =
+          this.dungeon?.parentFloor ??
+          (this.floor === -1
+            ? 1
+            : this.floor === -2
+            ? -1
+            : this.floor === -3
+            ? -2
+            : typeof this.floor === 'number' && this.floor > 1
+            ? this.floor - 1
+            : 1);
         return {
           kind: 'stairsUp',
-          label: prevFloor === 1 ? '▲ Tierra 1' : `▲ Piso ${prevFloor}`,
-          hint: prevFloor === 1 ? 'Subir a la Superficie (Tierra 1)' : `Subir al Piso ${prevFloor}`,
+          label: prevFloor === 1 ? '▲ Superficie' : `▲ Piso ${prevFloor}`,
+          hint: prevFloor === 1 ? 'Subir a la Superficie (Hélade)' : `Subir al Piso ${prevFloor}`,
           target: this.dungeon.stairsUp,
+          targetFloor: prevFloor,
         };
       }
-      if (this.floor === FINAL_FLOOR && !this.finalBossDefeated) {
+
+      const isFin = isFinalFloorLevel(this.floor);
+      if (isFin && !this.finalBossDefeated) {
         return {
           kind: 'stairs',
           locked: true,
           label: 'Sellado',
           hint: 'Derrota a Hades antes de continuar',
-          target: this.dungeon.stairs,
+          target: nearestStairsDown,
         };
       }
-      if (this.floor === 1) {
+      if (isFin && this.finalBossDefeated) {
         return {
           kind: 'stairs',
-          label: 'Inframundo',
-          hint: 'Entrar al Inframundo (Piso 2)',
-          target: this.dungeon.stairs,
+          label: 'Mundo II',
+          hint: 'Trascender a Mundo II (El Firmamento de los Titanes)',
+          target: nearestStairsDown,
+          targetFloor: 'mundo-2',
         };
       }
-      if (this.floor === FINAL_FLOOR && this.finalBossDefeated) {
-        return {
-          kind: 'stairs',
-          label: 'Abismo 23',
-          hint: 'Entrar al Modo Abismo Infinito (Piso 23)',
-          target: this.dungeon.stairs,
-        };
-      }
+      const destFloor =
+        nearestStairsDown.targetFloor ??
+        (this.floor === 1
+          ? 2
+          : typeof this.floor === 'number' && this.floor < 0
+          ? this.floor - 1
+          : typeof this.floor === 'number'
+          ? this.floor + 1
+          : 2);
       return {
         kind: 'stairs',
-        label: `▼ Piso ${this.floor + 1}`,
-        hint: `Descender al Piso ${this.floor + 1}`,
-        target: this.dungeon.stairs,
+        label: nearestStairsDown.label || (destFloor === -3 ? '▼ Tártaro (-3)' : `▼ Piso ${destFloor}`),
+        hint: nearestStairsDown.hint || `Descender al Piso ${destFloor}`,
+        target: nearestStairsDown,
+        targetFloor: destFloor,
+        isDeadEndBranch: nearestStairsDown.isDeadEndBranch,
       };
     }
 
@@ -848,19 +916,49 @@ export class ArchGame {
     return true;
   }
 
-  _changeFloor(targetFloor, entry, logMessage) {
+  _changeFloor(targetFloor, entry, logMessage, options = {}) {
     this.addLog(logMessage);
-    this._loadFloor(targetFloor, { entry });
+    this._loadFloor(targetFloor, { entry, parentFloor: options.parentFloor, isDeadEnd: options.isDeadEnd });
+    const isFin = isFinalFloorLevel(this.floor);
     const title =
-      this.floor === 1
-        ? `Tierra 1/${FINAL_FLOOR}`
-        : this.floor <= FINAL_FLOOR
-        ? `Piso ${this.floor}/${FINAL_FLOOR}`
-        : `Abismo · Piso ${this.floor}`;
+      this.floor === 'mundo-2'
+        ? 'Mundo II: El Firmamento de los Titanes'
+        : this.floor === 1
+        ? 'Tierra 1 (Superficie)'
+        : isFin
+        ? 'Piso -3 · Trono del Tártaro'
+        : typeof this.floor === 'string' && this.floor.includes('cripta')
+        ? 'Cripta (Sin Salida)'
+        : typeof this.floor === 'string' && this.floor.includes('fragua')
+        ? 'Fragua (Sin Salida)'
+        : `Piso ${this.floor}`;
     this.onEvent?.({
       type: 'floor',
       title,
       message: this.dungeon?.biome?.name || (entry === 'stairsDown' ? 'Ascenso' : 'Nuevo descenso'),
+    });
+    this._notify();
+    return true;
+  }
+
+  transitionToNewWorld() {
+    this.addLog('✨ Trascendencia completada: Has entrado a Mundo II (El Firmamento de los Titanes).');
+    this._loadFloor('mundo-2', { entry: 'spawn', savePrevious: true });
+    this.shakeScreen(0.85);
+    this.renderer3d?.triggerSkillVFX({
+      type: 'solar_nova',
+      x: this.pos.x,
+      y: this.pos.y,
+      damage: 200,
+      isCrit: true,
+      color: '#38bdf8',
+    });
+    this.addFloater(this.pos.x, this.pos.y, '✨ ¡MUNDO II: FIRMAMENTO DE LOS TITANES! ✨', '#38bdf8');
+    this.onEvent?.({
+      type: 'new_world',
+      title: 'Mundo II Desbloqueado',
+      message: 'El Firmamento de los Titanes',
+      floor: 'mundo-2',
     });
     this._notify();
     return true;
@@ -873,14 +971,15 @@ export class ArchGame {
     if (near.kind === 'chest') {
       const c = near.target;
       c.opened = true;
+      archAudio.playLootPickup('item', 'rare');
       const item = generateItem({
-        level: this.floor,
+        level: Math.abs(parseInt(this.floor, 10) || 1),
         tier: 'champion',
         preferredClass: this.hero.classId,
         seed: `${this.seed}:chest:${this.floor}:${c.x}`,
       });
       this.groundDrops.push({ x: c.x, y: c.y, kind: 'item', item });
-      this.groundDrops.push({ x: c.x + 0.25, y: c.y, kind: 'gold', amount: 22 * this.floor });
+      this.groundDrops.push({ x: c.x + 0.25, y: c.y, kind: 'gold', amount: 22 * Math.max(1, Math.abs(parseInt(this.floor, 10) || 1)) });
       this.addFloater(c.x, c.y, 'Cofre Antiguo abierto', '#facc15');
       this._advanceQuest('obolo_caronte', 1, c.x, c.y);
       this._notify();
@@ -889,6 +988,7 @@ export class ArchGame {
 
     if (near.kind === 'shrine') {
       this.dungeon.shrine.used = true;
+      archAudio.playFanfare('shrine');
       const derived = computeHeroDerived(this.hero);
       this.hero.hp = derived.maxHp;
       this.hero.mana = derived.maxMana;
@@ -899,22 +999,72 @@ export class ArchGame {
       return true;
     }
 
+    if (near.kind === 'fairy') {
+      const f = near.target;
+      f.visited = true;
+      archAudio.playFanfare('fairy');
+      const derived = computeHeroDerived(this.hero);
+      this.hero.hp = derived.maxHp;
+      this.hero.mana = derived.maxMana;
+      this.hero.buffs.shieldUntil = Date.now() + 12000;
+      this.hero.buffs.furyUntil = Date.now() + 8000;
+      this.renderer3d?.triggerFairyBlessing(f);
+      this.addFloater(this.pos.x, this.pos.y, '✨ ¡Bendición de la Gran Hada!', '#f472b6');
+      this.addLog('La Gran Hada restaura tu salud y vigor, y te envuelve en una Égida protectora.');
+      this.onEvent?.({
+        type: 'fairy',
+        title: 'Fuente de la Gran Hada',
+        message: 'Salud y fervor restaurados al 100%. Égida de Protección concedida.',
+      });
+      this._notify();
+      return true;
+    }
+
     if (near.kind === 'stairsUp') {
-      if (this.floor <= 1) return false;
-      const targetFloor = this.floor - 1;
-      const msg =
-        targetFloor === 1 ? 'Subes a la Superficie (Hélade)...' : `Subes al piso ${targetFloor}...`;
-      return this._changeFloor(targetFloor, 'stairsDown', msg);
+      const returnFloor =
+        near.targetFloor ??
+        this.dungeon?.parentFloor ??
+        (this.floor === -1
+          ? 1
+          : this.floor === -2
+          ? -1
+          : this.floor === -3
+          ? -2
+          : typeof this.floor === 'number' && this.floor > 1
+          ? this.floor - 1
+          : 1);
+      const msg = returnFloor === 1 ? 'Subes a la Superficie (Hélade)...' : `Subes al piso ${returnFloor}...`;
+      return this._changeFloor(returnFloor, 'stairsDown', msg);
     }
 
     if (near.kind === 'stairs') {
       if (near.locked) {
         this.addFloater(this.pos.x, this.pos.y, '¡Derrota a Hades primero!', '#f97316');
-        this.addLog('El portal del Tártaro está sellado mientras Hades viva en el Piso 22.');
+        this.addLog('El portal del Tártaro está sellado mientras Hades viva.');
         return false;
       }
-      const targetFloor = this.floor + 1;
-      return this._changeFloor(targetFloor, 'stairsUp', `Desciendes al piso ${targetFloor}...`);
+      if (isFinalFloorLevel(this.floor) && this.finalBossDefeated) {
+        return this.transitionToNewWorld();
+      }
+      const targetFloor =
+        near.targetFloor ??
+        (this.floor === 1
+          ? 2
+          : typeof this.floor === 'number' && this.floor < 0
+          ? this.floor - 1
+          : typeof this.floor === 'number'
+          ? this.floor + 1
+          : 2);
+      const isDeadEndBranch = Boolean(near.target?.isDeadEndBranch || near.isDeadEndBranch);
+      const msg =
+        near.hint ||
+        (targetFloor === -3
+          ? 'Desciendes al Trono del Tártaro (Piso -3)...'
+          : `Desciendes al piso ${targetFloor}...`);
+      return this._changeFloor(targetFloor, 'stairsUp', msg, {
+        parentFloor: this.floor,
+        isDeadEnd: isDeadEndBranch,
+      });
     }
 
     if (near.kind === 'npc') {
@@ -943,6 +1093,68 @@ export class ArchGame {
       x: this.pos.x + (this.lastAimDir?.x ?? 1),
       y: this.pos.y + (this.lastAimDir?.y ?? 0),
     };
+  }
+
+  /**
+   * Golpea y destruye vasijas rompibles o corta arbustos cercanos (estilo Zelda OoT).
+   */
+  _strikePotsAndBushes(originX, originY, maxDist = 1.8) {
+    if (!this.dungeon) return;
+    const derived = computeHeroDerived(this.hero);
+
+    if (this.dungeon.pots) {
+      for (const pot of this.dungeon.pots) {
+        if (!pot.broken && Math.hypot(pot.x - originX, pot.y - originY) <= maxDist) {
+          pot.broken = true;
+          archAudio.playPotBreak();
+          this.renderer3d?.triggerPotBreak(pot);
+          this.shakeScreen(0.18);
+          // Botín clásico al romper vasija (Zelda OoT: Corazones, Fervor o Dracmas)
+          const roll = Math.random();
+          if (roll < 0.38) {
+            const heal = Math.max(10, Math.round(derived.maxHp * 0.18));
+            this.hero.hp = Math.min(derived.maxHp, this.hero.hp + heal);
+            this.addFloater(pot.x, pot.y, `+${heal} HP Corazón`, '#f43f5e');
+          } else if (roll < 0.68) {
+            const mana = Math.max(8, Math.round(derived.maxMana * 0.22));
+            this.hero.mana = Math.min(derived.maxMana, this.hero.mana + mana);
+            this.addFloater(pot.x, pot.y, `+${mana} Fervor`, '#38bdf8');
+          } else {
+            const dracmas = 8 + Math.floor(Math.random() * 12 * Math.max(1, this.floor));
+            this.hero.gold += dracmas;
+            this.addFloater(pot.x, pot.y, `+${dracmas} dracmas`, '#facc15');
+          }
+          this._notify();
+        }
+      }
+    }
+
+    if (this.dungeon.bushes) {
+      for (const bush of this.dungeon.bushes) {
+        if (!bush.cut && Math.hypot(bush.x - originX, bush.y - originY) <= maxDist) {
+          bush.cut = true;
+          archAudio.playBushCut();
+          this.renderer3d?.triggerBushCut(bush);
+          this.shakeScreen(0.14);
+          // Botín al cortar hierba (Zelda OoT: Rocío de Hada, Fervor o monedas)
+          const roll = Math.random();
+          if (roll < 0.35) {
+            const heal = Math.max(6, Math.round(derived.maxHp * 0.12));
+            this.hero.hp = Math.min(derived.maxHp, this.hero.hp + heal);
+            this.addFloater(bush.x, bush.y, `+${heal} Rocío de Hada`, '#4ade80');
+          } else if (roll < 0.60) {
+            const mana = Math.max(6, Math.round(derived.maxMana * 0.14));
+            this.hero.mana = Math.min(derived.maxMana, this.hero.mana + mana);
+            this.addFloater(bush.x, bush.y, `+${mana} Fervor`, '#38bdf8');
+          } else if (roll < 0.85) {
+            const dracmas = 4 + Math.floor(Math.random() * 7);
+            this.hero.gold += dracmas;
+            this.addFloater(bush.x, bush.y, `+${dracmas} dracmas`, '#facc15');
+          }
+          this._notify();
+        }
+      }
+    }
   }
 
   basicAttackNearest({ allowInteract = true } = {}) {
@@ -977,6 +1189,15 @@ export class ArchGame {
       return;
     }
 
+    // Progresión de combo de 3 pasos (Zelda OoT attack sequence)
+    const now = performance.now();
+    if (!this.lastAttackTs || now - this.lastAttackTs > 950) {
+      this.comboStep = 0;
+    } else {
+      this.comboStep = ((this.comboStep || 0) + 1) % 3;
+    }
+    this.lastAttackTs = now;
+
     const target = inRangeTarget;
     if (target) {
       const dist = Math.hypot(target.x - this.pos.x, target.y - this.pos.y);
@@ -989,7 +1210,19 @@ export class ArchGame {
         const ang = Math.atan2(target.y - this.pos.y, target.x - this.pos.x);
         this.lastAimDir = { x: Math.cos(ang), y: Math.sin(ang) };
         this.attackCdLeft = derived.attackCd;
-        this.renderer3d?.triggerHeroAttack({ whirlwind: false });
+        archAudio.playAttackSwing({
+          classId: this.hero.classId,
+          comboStep: this.comboStep,
+          isBow: derived.range > 2.2,
+        });
+        this.renderer3d?.triggerHeroAttack({
+          whirlwind: false,
+          comboStep: this.comboStep,
+          aimDir: this.lastAimDir,
+          classId: this.hero.classId,
+          pos: this.pos,
+        });
+        this._strikePotsAndBushes(this.pos.x, this.pos.y, derived.range + 0.6);
         if (derived.range > 2.2) {
           this.projectiles.push({
             fromHero: true,
@@ -1012,7 +1245,19 @@ export class ArchGame {
 
     // Respuesta inmediata al tocar Atacar (incluso en movimiento / sin blanco cercano)
     this.attackCdLeft = derived.attackCd;
-    this.renderer3d?.triggerHeroAttack({ whirlwind: false });
+    archAudio.playAttackSwing({
+      classId: this.hero.classId,
+      comboStep: this.comboStep,
+      isBow: derived.range > 2.2,
+    });
+    this.renderer3d?.triggerHeroAttack({
+      whirlwind: false,
+      comboStep: this.comboStep,
+      aimDir: this.lastAimDir,
+      classId: this.hero.classId,
+      pos: this.pos,
+    });
+    this._strikePotsAndBushes(this.pos.x, this.pos.y, derived.range + 0.6);
     if (derived.range > 2.2) {
       const aim = this._aimFallbackTarget();
       const ang = Math.atan2(aim.y - this.pos.y, aim.x - this.pos.x);
@@ -1045,7 +1290,24 @@ export class ArchGame {
     this.hero.mana -= skill.cost;
     if (slot === 'q') this.skillQCd = skill.cd;
     else this.skillECd = skill.cd;
-    this.renderer3d?.triggerHeroAttack({ whirlwind: this.hero.classId === 'campeon' && slot === 'q' });
+    const skillAudioMap = {
+      campeon: { q: 'whirlwind', e: 'shout' },
+      hoplita: { q: 'shield_slam', e: 'solar_nova' },
+      arquera: { q: 'lunar_arrow', e: 'salva' },
+      oraculo: { q: 'lightning', e: 'solar_nova' },
+      necromante: { q: 'caronte_spear', e: 'atropos_void' },
+      sombra: { q: 'erinias_slash', e: 'sentinel_burst' },
+      coribante: { q: 'earth_shatter', e: 'licaon_roar' },
+    };
+    archAudio.playSkillCast(skillAudioMap[this.hero.classId]?.[slot] || 'lightning');
+    this.renderer3d?.triggerHeroAttack({
+      whirlwind: this.hero.classId === 'campeon' && slot === 'q',
+      comboStep: 2,
+      aimDir: this.lastAimDir,
+      classId: this.hero.classId,
+      pos: this.pos,
+    });
+    this._strikePotsAndBushes(this.pos.x, this.pos.y, 2.8);
 
     const rawDerived = computeHeroDerived(this.hero);
     const pMult = rawDerived.skillPowerMult || 1;
@@ -1438,11 +1700,40 @@ export class ArchGame {
       attackerLevel: this.hero.level,
       targetArmor: enemy.armor,
       critChance: derived.critChance,
+      rng: derived.rng,
     });
     if (!res.hit) {
       this.addFloater(enemy.x, enemy.y, 'Fallo', '#94a3b8');
       return res;
     }
+
+    // Retroceso físico direccional (Knockback recoil)
+    const ang = Math.atan2(enemy.y - this.pos.y, enemy.x - this.pos.x);
+    const kDist = res.crit ? 0.65 : 0.32;
+    const nx = enemy.x + Math.cos(ang) * kDist;
+    const ny = enemy.y + Math.sin(ang) * kDist;
+    if (isWalkable(this.dungeon, nx, ny)) {
+      enemy.x = nx;
+      enemy.y = ny;
+    }
+
+    // Efectos de impacto y chispas direccionales (estilo Zelda OoT)
+    archAudio.playHitImpact({ isCrit: res.crit, blocked: false });
+    this.renderer3d?.triggerHitImpactVFX({
+      x: enemy.x,
+      y: enemy.y,
+      isCrit: res.crit,
+      dirX: Math.cos(ang),
+      dirY: Math.sin(ang),
+      damage: res.damage,
+    });
+
+    // Hitstop (micro-pausa en golpes críticos para mayor contundencia)
+    if (res.crit) {
+      this.hitStopTimer = 0.045;
+      this.shakeScreen(0.35);
+    }
+
     enemy.hp = Math.max(0, enemy.hp - res.damage);
     this.addFloater(enemy.x, enemy.y, res.crit ? `${res.damage}!` : `${res.damage}`, res.crit ? '#facc15' : '#f8fafc');
     if (derived.lifeOnHit > 0) {
@@ -1461,6 +1752,7 @@ export class ArchGame {
     if (q.progress < q.targetCount) return;
 
     q.completed = true;
+    archAudio.playFanfare('quest');
     if (questId === 'antro_perjuros') {
       this.hero.skillPoints += 1;
       this.hero.statPoints += 1;
@@ -1502,8 +1794,11 @@ export class ArchGame {
   }
 
   _onEnemyKilled(enemy) {
+    archAudio.playEnemyDeath({ isBoss: enemy.tier === 'boss' || enemy.isFinalBoss, kind: enemy.kind });
+    this.renderer3d?.triggerEnemyDeath(enemy);
     const levels = grantHeroXp(this.hero, enemy.xp);
     if (levels > 0) {
+      archAudio.playFanfare('levelup');
       const derived = computeHeroDerived(this.hero);
       this.hero.hp = derived.maxHp;
       this.hero.mana = derived.maxMana;
@@ -1540,6 +1835,7 @@ export class ArchGame {
     if (enemy.isFinalBoss || enemy.kind === 'hades') {
       this.finalBossDefeated = true;
       this.endlessUnlocked = true;
+      archAudio.playFanfare('victory');
       const royalRelic = generateItem({
         level: this.floor + 2,
         forceRarity: 'unique',
@@ -1564,6 +1860,14 @@ export class ArchGame {
         title: '¡Triunfo en el Tártaro!',
         message: `Has derrotado a ${enemy.name} en el Piso ${this.floor} y conquistado el Inframundo.`,
         floor: this.floor,
+        hero: this.hero,
+      });
+      this.onEvent?.({
+        type: 'story_sequence',
+        title: 'El Fin de la Noche Estigia',
+        message: `La caída de Hades desgarra el velo del Tártaro. Las constelaciones cósmicas reclaman tu destino.`,
+        floor: this.floor,
+        hero: this.hero,
       });
     }
     this._notify();
@@ -1574,6 +1878,12 @@ export class ArchGame {
     const dt = Math.min(0.05, Math.max(0.001, (ts - this.lastTs) / 1000));
     this.lastTs = ts;
     this.lastDt = dt;
+    if (this.hitStopTimer > 0) {
+      this.hitStopTimer = Math.max(0, this.hitStopTimer - dt);
+      this._render();
+      requestAnimationFrame((nextTs) => this._loop(nextTs));
+      return;
+    }
     if (!this.gameOver) this._update(dt);
     this._render();
     requestAnimationFrame((nextTs) => this._loop(nextTs));
@@ -1585,6 +1895,10 @@ export class ArchGame {
     this.skillQCd = Math.max(0, this.skillQCd - dt);
     this.skillECd = Math.max(0, this.skillECd - dt);
     this.hero.mana = Math.min(derived.maxMana, this.hero.mana + dt * 2.2);
+
+    if (this.dungeon?.isOverworld) {
+      this.dayTime = ((this.dayTime || 0.22) + dt * 0.008) % 1;
+    }
 
     if (this.attackBufferTimer > 0) {
       this.attackBufferTimer -= dt;
@@ -1673,6 +1987,11 @@ export class ArchGame {
       if (isWalkable(this.dungeon, this.pos.x, ny)) this.pos.y = ny;
       updateVisibility(this.dungeon, this.pos.x, this.pos.y, this.dungeon.isOverworld ? 11 : 8);
 
+      const surfaceKind = this.dungeon.isOverworld
+        ? this.dungeon.terrain?.[Math.floor(this.pos.y)]?.[Math.floor(this.pos.x)] || 'grass'
+        : 'stone';
+      archAudio.playFootstep(surfaceKind);
+
       if (this.dungeon.isOverworld) {
         const zone = getZoneAt(this.dungeon, this.pos.x, this.pos.y);
         const nextZid = zone?.id || null;
@@ -1707,15 +2026,18 @@ export class ArchGame {
       if (Math.hypot(d.x - this.pos.x, d.y - this.pos.y) > 0.75) continue;
       if (d.kind === 'gold') {
         this.hero.gold += d.amount;
+        archAudio.playLootPickup('gold');
         this.addFloater(d.x, d.y, `+${d.amount} dracmas`, '#facc15', { kind: 'loot' });
         this.groundDrops.splice(i, 1);
         this._notify();
       } else if (d.kind === 'potion') {
         this.hero.potions += d.amount;
+        archAudio.playLootPickup('potion');
         this.addFloater(d.x, d.y, '+1 Ambrosía', '#f87171', { kind: 'loot' });
         this.groundDrops.splice(i, 1);
         this._notify();
       } else if (d.kind === 'item' && (this.autoManageEnabled || this.hero.inventory.length < 16)) {
+        archAudio.playLootPickup('item', d.item?.rarity);
         if (this.autoManageEnabled) {
           const res = this.handleAutoItemPickup(d.item, d.x, d.y);
           if (res.action === 'equipped' && (d.item.rarity === 'rare' || d.item.rarity === 'unique')) {
@@ -1780,8 +2102,21 @@ export class ArchGame {
           critChance: 0.05,
         });
         if (hit.hit) {
-          this.hero.hp = Math.max(0, this.hero.hp - hit.damage);
-          this.addFloater(this.pos.x, this.pos.y, `-${hit.damage}`, '#ef4444');
+          const hasShield = Boolean(
+            derived.armor >= 20 ||
+            (this.hero.equipment && this.hero.equipment.offhand?.type === 'shield') ||
+            (this.hero.buffs?.shieldUntil || 0) > Date.now()
+          );
+          const isBlocked = hasShield && ((this.hero.buffs?.shieldUntil || 0) > Date.now() || Math.random() < 0.32);
+          const finalDmg = isBlocked ? Math.max(1, Math.round(hit.damage * 0.45)) : hit.damage;
+          this.hero.hp = Math.max(0, this.hero.hp - finalDmg);
+          archAudio.playHitImpact({ isCrit: hit.crit, blocked: isBlocked });
+          this.renderer3d?.triggerHeroHurt({ blocked: isBlocked, x: this.pos.x, y: this.pos.y });
+          if (isBlocked) {
+            this.addFloater(this.pos.x, this.pos.y, `🛡 Bloqueo -${finalDmg}`, '#38bdf8');
+          } else {
+            this.addFloater(this.pos.x, this.pos.y, `-${finalDmg}`, '#ef4444');
+          }
           if (this.hero.hp <= 0) {
             this.gameOver = true;
             this.attackHeld = false;
@@ -1808,19 +2143,21 @@ export class ArchGame {
         if (isWalkable(this.dungeon, ex, e.y)) e.x = ex;
         if (isWalkable(this.dungeon, e.x, ey)) e.y = ey;
       } else if (e.cdLeft <= 0) {
-        e.cdLeft = e.kind === 'harpy' ? 0.9 : 1.2;
-        if (e.range > 2.0) {
+        e.cdLeft = e.kind === 'harpy' ? 0.65 : e.kind === 'satyr' ? 0.95 : e.isFinalBoss ? 0.75 : e.tier === 'boss' ? 1.0 : 0.85;
+        if (e.range > 2.0 || (e.isFinalBoss && dist > 2.4 && Math.random() < 0.6)) {
           const ang = Math.atan2(this.pos.y - e.y, this.pos.x - e.x);
+          const pColor = e.isFinalBoss ? '#c084fc' : '#fbbf24';
+          const pSpeed = e.isFinalBoss ? 13.5 : 12.0;
           this.projectiles.push({
             fromHero: false,
             x: e.x,
             y: e.y,
-            vx: Math.cos(ang) * 7.5,
-            vy: Math.sin(ang) * 7.5,
-            life: 1.0,
+            vx: Math.cos(ang) * pSpeed,
+            vy: Math.sin(ang) * pSpeed,
+            life: 1.2,
             minDmg: e.damage[0],
             maxDmg: e.damage[1],
-            color: '#fbbf24',
+            color: pColor,
           });
         } else {
           const hit = resolveStrike({
@@ -1829,11 +2166,24 @@ export class ArchGame {
             attackerLevel: e.level,
             targetArmor: derived.armor,
             targetDex: derived.stats.dexterity,
-            critChance: e.tier === 'boss' ? 0.14 : 0.05,
+            critChance: e.isFinalBoss ? 0.20 : e.tier === 'boss' ? 0.15 : e.tier === 'champion' ? 0.10 : 0.05,
           });
           if (hit.hit) {
-            this.hero.hp = Math.max(0, this.hero.hp - hit.damage);
-            this.addFloater(this.pos.x, this.pos.y, `-${hit.damage}`, '#ef4444');
+            const hasShield = Boolean(
+              derived.armor >= 20 ||
+              (this.hero.equipment && this.hero.equipment.offhand?.type === 'shield') ||
+              (this.hero.buffs?.shieldUntil || 0) > Date.now()
+            );
+            const isBlocked = hasShield && ((this.hero.buffs?.shieldUntil || 0) > Date.now() || Math.random() < 0.32);
+            const finalDmg = isBlocked ? Math.max(1, Math.round(hit.damage * 0.45)) : hit.damage;
+            this.hero.hp = Math.max(0, this.hero.hp - finalDmg);
+            archAudio.playHitImpact({ isCrit: hit.crit, blocked: isBlocked });
+            this.renderer3d?.triggerHeroHurt({ blocked: isBlocked, x: this.pos.x, y: this.pos.y });
+            if (isBlocked) {
+              this.addFloater(this.pos.x, this.pos.y, `🛡 Bloqueo -${finalDmg}`, '#38bdf8');
+            } else {
+              this.addFloater(this.pos.x, this.pos.y, `-${finalDmg}`, '#ef4444');
+            }
             if (this.hero.hp <= 0) {
               this.gameOver = true;
               this.attackHeld = false;
@@ -1902,6 +2252,11 @@ export class ArchGame {
       rock: '#57534e',
       forest: '#2f632b',
       cliff: '#6b5e50',
+      astral_grass: '#312e81',
+      starlight_water: '#0284c7',
+      crystal_marble: '#e0e7ff',
+      aether_dirt: '#4f46e5',
+      cosmic_rock: '#1e1b4b',
     };
 
     // Pintar suelo (solo en fallback 2D) y etiquetas de hitos visibles

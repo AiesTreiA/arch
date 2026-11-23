@@ -5,6 +5,7 @@
  */
 import { HERO_CLASSES } from '../core/combat.js';
 import { CLASS_BASE_ITEMS } from '../core/loot.js';
+import { archAudio } from '../game/audio.js';
 import { ArchGame } from '../game/engine.js';
 import { HeroPreview3D } from '../game/models3d.js';
 import {
@@ -17,6 +18,7 @@ import {
 } from './controls.js';
 import { getAttackIcon, getInteractIcon, getSkillIcon, UI_ICONS } from './icons.js';
 import { createItemsPanelController } from './itemsPanel.js';
+import { createSideEvolvePanelController } from './sidePanel.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -35,6 +37,7 @@ export function initArchUi() {
   const drawerSheet = gameDrawer.querySelector('.drawer-sheet');
   const gameOverModal = $('gameOverModal');
   const victoryModal = $('victoryModal');
+  const storyModal = $('storyModal');
   const toastEl = $('hudToast');
 
   const heroPreview3d = new HeroPreview3D($('heroPreviewCanvas'));
@@ -190,10 +193,12 @@ export function initArchUi() {
   }
 
   let itemsPanel = null;
+  let sidePanel = null;
 
-  // Actualización rápida de HUD (barras, cooldowns, buffs, botón contextual)
+  // Actualización rápida de HUD (barras, cooldowns, buffs, botón contextual, panel lateral)
   function updateHudTick(tick) {
     const { hero, derived, classDef, skills, attackCdLeft, skillQCd, skillECd, furyLeftSec, shieldLeftSec, nearby, gameOver } = tick;
+    sidePanel?.update(tick);
 
     $('hpBar').style.width = `${Math.max(0, Math.min(100, (hero.hp / derived.maxHp) * 100))}%`;
     $('manaBar').style.width = `${Math.max(0, Math.min(100, (hero.mana / derived.maxMana) * 100))}%`;
@@ -306,13 +311,72 @@ export function initArchUi() {
     if (!gameOverModal.open) gameOverModal.showModal();
   }
 
+  const STORY_CHAPTERS = [
+    {
+      badge: 'Capítulo I de IV',
+      heading: 'El Ocaso del Soberano de los Muertos',
+      art: '💀 ⚔ 👑',
+      text: 'Hades, el Inconquistable Señor del Tártaro, cae de rodillas sobre las losas agrietadas de obsidiana. Su corona forjada en los albores del tiempo rueda por el suelo y las cadenas estigias que aprisionaban a los difuntos se pulverizan en una nube de ascuas.',
+      quote: '«Mortal audaz... quebraste mi trono. Pero la muerte era el único cerrojo que contenía los horrores del Vacío Cósmico. Las estrellas ya reclaman tu sangre.»',
+      btnText: 'Continuar la Visión →',
+    },
+    {
+      badge: 'Capítulo II de IV',
+      heading: 'El Despertar de los Titanes Primordiales',
+      art: '🌋 ⚡ 🪐',
+      text: 'Un rugido sísmico sacude la estructura misma de la realidad. El techo pétreo del Inframundo se fragmenta en millones de prismas luminosos. A través de la fisura dimensional, el oráculo de la Sibila resuena con fulgor divino:',
+      quote: '«¡Héroe de la Hélade! Has purgado el abismo, pero la caída de Hades ha quebrado los Sellos Primigenios. El Firmamento de los Titanes despierta más allá de la tierra de los hombres.»',
+      btnText: 'Ascender a las Alturas →',
+    },
+    {
+      badge: 'Capítulo III de IV',
+      heading: 'Trascendencia al Éter Astral',
+      art: '✨ 🌌 🌀',
+      text: 'Una columna de luz celestial turquesa y dorada desciende desde la bóveda hendida. Tu cuerpo mortal se desmaterializa en partículas estelares puras, elevándote a través de nebulosas infinitas, dejando atrás para siempre el polvo del Tártaro.',
+      quote: '«Deja atrás las sombras de los muertos. Tu destino aguarda en las islas suspendidas del cosmos.»',
+      btnText: 'Cruzar el Umbral Cósmico →',
+    },
+    {
+      badge: 'Capítulo IV de IV',
+      heading: 'Llegada al Nuevo Mundo: El Firmamento de los Titanes',
+      art: '🏛 🌟 🪽',
+      text: 'Abres los ojos sobre terrazas de mármol flotante que orbitan en el cosmos. Ríos de starlight turquesa fluyen entre obeliscos celestiales y santuarios de dioses antiguos que precedieron al Olimpo. Has conquistado el Inframundo terrenal y ahora te alzas en un Reino Superior.',
+      quote: '«¡Tu gesta inmortal recomienza! Bienvenido a Mundo II: El Firmamento de los Titanes.»',
+      btnText: '✦ Entrar al Nuevo Mundo (Mundo II) ✦',
+    },
+  ];
+
+  let currentStoryStep = 0;
+
+  function renderStoryStep(stepIndex) {
+    currentStoryStep = Math.max(0, Math.min(STORY_CHAPTERS.length - 1, stepIndex));
+    const ch = STORY_CHAPTERS[currentStoryStep];
+    if ($('storyBadge')) $('storyBadge').textContent = ch.badge;
+    if ($('storyTitle')) $('storyTitle').textContent = ch.heading;
+    if ($('storyIllustration')) $('storyIllustration').textContent = ch.art;
+    if ($('storyParagraph')) $('storyParagraph').textContent = ch.text;
+    if ($('storyQuote')) $('storyQuote').textContent = ch.quote;
+    if ($('btnStoryNext')) $('btnStoryNext').textContent = ch.btnText;
+
+    const dots = document.querySelectorAll('#storyDots .story-dot');
+    dots.forEach((dot, idx) => {
+      dot.classList.toggle('is-active', idx === currentStoryStep);
+    });
+  }
+
+  function openStoryDialog() {
+    if (gameDrawer.open) gameDrawer.close();
+    renderStoryStep(0);
+    if (storyModal && !storyModal.open) storyModal.showModal();
+  }
+
   function openVictoryDialog() {
     if (gameDrawer.open) gameDrawer.close();
     const hero = game.hero;
     if (!hero) return;
     const completed = (hero.quests || []).filter((q) => q.completed).length;
     $('victorySummary').textContent =
-      `${hero.name} derrotó a Hades, Soberano del Tártaro, en el Piso ${game.floor} (Nivel ${hero.level} · ${completed}/3 Hazañas · ${hero.gold} dracmas). El Modo Abismo Infinito quedó desbloqueado.`;
+      `${hero.name} derrotó a Hades, Soberano del Tártaro, en el Piso ${game.floor} (Nivel ${hero.level} · ${completed}/3 Hazañas · ${hero.gold} dracmas). El Nuevo Mundo y el Abismo Infinito han quedado abiertos.`;
     if (victoryModal && !victoryModal.open) victoryModal.showModal();
   }
 
@@ -320,8 +384,15 @@ export function initArchUi() {
     canvas: $('gameCanvas'),
     onHudTick: updateHudTick,
     onEvent(ev) {
+      if (ev.type === 'story_sequence') {
+        openStoryDialog();
+        return;
+      }
       if (ev.type === 'victory') {
-        openVictoryDialog();
+        // If story dialog is already open or scheduled, let story proceed; also allow opening victory dialog
+        if (!storyModal || !storyModal.open) {
+          openStoryDialog();
+        }
         return;
       }
       if (ev.type === 'loot' && ev.item) {
@@ -522,6 +593,7 @@ export function initArchUi() {
 
       // Pestaña Ítems (Equipo + Comparador + Mochila)
       itemsPanel?.render(state);
+      sidePanel?.update(state);
     },
   });
 
@@ -529,6 +601,11 @@ export function initArchUi() {
     equipRoot: $('equipBox'),
     invRoot: $('invBox'),
     game,
+  });
+
+  sidePanel = createSideEvolvePanelController({
+    game,
+    openDrawer,
   });
 
   // Pestañas del cajón (ARIA Tabs + navegación por teclado)
@@ -628,10 +705,57 @@ export function initArchUi() {
     showToast({ title: 'Controles', message: labelMap[touchMode], color: '#38bdf8', duration: 2400 });
   };
 
-  // Botones Zoom y Pantalla Completa
+  // Botones Zoom, Audio Acústico y Pantalla Completa
   $('btnZoomIn').onclick = () => game.adjustZoom(0.15);
   $('btnZoomOut').onclick = () => game.adjustZoom(-0.15);
   $('btnFullscreen').onclick = () => fullscreenCtrl.toggle();
+
+  function syncAudioUi() {
+    const isMuted = archAudio.muted;
+    const btnSound = $('btnToggleSound');
+    if (btnSound) {
+      btnSound.setAttribute('aria-pressed', isMuted ? 'false' : 'true');
+      btnSound.title = isMuted ? 'Audio silenciado (clic o [M] para activar)' : 'Audio Acústico activo (clic o [M] para silenciar)';
+    }
+    const iconSound = $('iconSound');
+    if (iconSound) {
+      iconSound.innerHTML = isMuted ? UI_ICONS.soundOff : UI_ICONS.soundOn;
+    }
+    const soundTag = $('soundTag');
+    if (soundTag) {
+      soundTag.textContent = isMuted ? 'Mudo' : 'Audio';
+    }
+    const mSlider = $('musicVolSlider');
+    if (mSlider) mSlider.value = String(Math.round(archAudio.musicVolume * 100));
+    const sSlider = $('sfxVolSlider');
+    if (sSlider) sSlider.value = String(Math.round(archAudio.sfxVolume * 100));
+  }
+
+  if ($('btnToggleSound')) {
+    $('btnToggleSound').onclick = () => {
+      const muted = archAudio.toggleMute();
+      syncAudioUi();
+      showToast({
+        title: muted ? '🔇 Audio Silenciado' : '🔊 Audio Acústico Activado',
+        message: muted ? 'Música y efectos desactivados' : 'Kithara griega (Karplus-Strong) y efectos físicos activos',
+        color: muted ? '#94a3b8' : '#4ade80',
+        duration: 2400,
+      });
+    };
+  }
+
+  if ($('musicVolSlider')) {
+    $('musicVolSlider').oninput = (e) => {
+      archAudio.init();
+      archAudio.setVolumes({ music: Number(e.target.value) / 100 });
+    };
+  }
+  if ($('sfxVolSlider')) {
+    $('sfxVolSlider').oninput = (e) => {
+      archAudio.init();
+      archAudio.setVolumes({ sfx: Number(e.target.value) / 100 });
+    };
+  }
 
   // Controles Mobile Legends (Joystick Izquierdo + Botones Derechos)
   createVirtualJoystick({
@@ -662,7 +786,7 @@ export function initArchUi() {
   $('btnSkillQ').onclick = () => game.castSkill('q');
   $('btnSkillE').onclick = () => game.castSkill('e');
 
-  // Atajos de teclado para abrir cajón (I, C, K)
+  // Atajos de teclado para abrir cajón (I, C, K) y silenciar audio (M)
   window.addEventListener('keydown', (e) => {
     if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
     if (startModal.open) return;
@@ -679,11 +803,17 @@ export function initArchUi() {
       e.preventDefault();
       if (gameDrawer.open && $('tabBtnQuests').getAttribute('aria-selected') === 'true') closeDrawer();
       else openDrawer('tabBtnQuests');
+    } else if (k === 'm') {
+      e.preventDefault();
+      archAudio.toggleMute();
+      syncAudioUi();
     }
   });
 
   // Hoguera / Inicio de partida
   function launchRun({ withFullscreen = false } = {}) {
+    archAudio.init();
+    archAudio.playFanfare('shrine');
     if (startModal.open) startModal.close();
     if (gameOverModal.open) gameOverModal.close();
     if (victoryModal?.open) victoryModal.close();
@@ -726,15 +856,33 @@ export function initArchUi() {
       if (!startModal.open) startModal.showModal();
     };
   }
+  if ($('btnVictoryStory')) {
+    $('btnVictoryStory').onclick = () => {
+      if (victoryModal?.open) victoryModal.close();
+      openStoryDialog();
+    };
+  }
   if ($('btnVictoryEndless')) {
     $('btnVictoryEndless').onclick = () => {
       if (victoryModal?.open) victoryModal.close();
-      showToast({
-        title: '🌌 Modo Abismo Infinito',
-        message: 'Recoge tu botín divino y cruza el portal del Tártaro [F] hacia el Piso 23.',
-        color: '#a855f7',
-        duration: 5000,
-      });
+      game.transitionToNewWorld();
+    };
+  }
+
+  if ($('btnStoryNext')) {
+    $('btnStoryNext').onclick = () => {
+      if (currentStoryStep < STORY_CHAPTERS.length - 1) {
+        renderStoryStep(currentStoryStep + 1);
+      } else {
+        if (storyModal?.open) storyModal.close();
+        game.transitionToNewWorld();
+        showToast({
+          title: '🌌 ¡Mundo II Desbloqueado!',
+          message: 'Bienvenido al Firmamento de los Titanes. Explora las islas cósmicas.',
+          color: '#38bdf8',
+          duration: 5500,
+        });
+      }
     };
   }
 
@@ -770,6 +918,7 @@ export function initArchUi() {
     if (icon) icon.innerHTML = UI_ICONS.potion;
   }
 
+  syncAudioUi();
   applyTouchMode();
   renderClassCards();
   startModal.showModal();

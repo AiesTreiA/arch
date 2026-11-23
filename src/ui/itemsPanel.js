@@ -11,7 +11,7 @@ import {
 } from '../core/loot.js';
 import { SLOT_ICONS, UI_ICONS } from './icons.js';
 
-const RARITY_CLASS = {
+export const RARITY_CLASS = {
   common: 'rarity-common',
   magic: 'rarity-magic',
   rare: 'rarity-rare',

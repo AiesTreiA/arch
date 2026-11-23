@@ -224,18 +224,18 @@ export const ACT1_QUESTS = [
 ];
 
 export const ENEMY_TEMPLATES = {
-  skeleton: { name: 'Hoplita Caído', hp: 34, damage: [5, 8], armor: 6, speed: 2.35, range: 1.2, xp: 24, color: '#cbd5e1' },
-  harpy: { name: 'Arpía del Estigia', hp: 26, damage: [6, 10], armor: 3, speed: 3.25, range: 1.25, xp: 28, color: '#c084fc' },
-  satyr: { name: 'Sátiro Arquero', hp: 28, damage: [6, 9], armor: 4, speed: 2.2, range: 4.6, xp: 30, color: '#fbbf24' },
-  minotaur: { name: 'Minotauro Guardián', hp: 115, damage: [12, 18], armor: 18, speed: 2.55, range: 1.5, xp: 130, color: '#f97316' },
+  skeleton: { name: 'Hoplita Caído', hp: 52, damage: [12, 19], armor: 8, speed: 2.65, range: 1.25, xp: 28, color: '#cbd5e1' },
+  harpy: { name: 'Arpía del Estigia', hp: 42, damage: [14, 22], armor: 5, speed: 3.55, range: 1.3, xp: 32, color: '#c084fc' },
+  satyr: { name: 'Sátiro Arquero', hp: 46, damage: [13, 20], armor: 6, speed: 2.45, range: 5.2, xp: 35, color: '#fbbf24' },
+  minotaur: { name: 'Minotauro Guardián', hp: 240, damage: [26, 40], armor: 24, speed: 2.7, range: 1.6, xp: 160, color: '#f97316' },
   hades: {
     name: 'Hades, Soberano del Tártaro',
-    hp: 340,
-    damage: [16, 24],
-    armor: 26,
-    speed: 2.75,
-    range: 2.15,
-    xp: 1200,
+    hp: 750,
+    damage: [38, 58],
+    armor: 36,
+    speed: 2.9,
+    range: 2.4,
+    xp: 1500,
     color: '#a855f7',
     isFinalBoss: true,
   },
@@ -396,11 +396,11 @@ export function computeHeroDerived(hero, nowMs = Date.now()) {
 /** Instancia un enemigo escalado por nivel de piso y categoría (normal / champion / boss). */
 export function createEnemy(spawn, id) {
   const tpl = ENEMY_TEMPLATES[spawn.kind] || ENEMY_TEMPLATES.skeleton;
-  const lv = Math.max(1, Number(spawn.level) || 1);
+  const lv = Math.max(1, Math.abs(Number(spawn.level) || 1));
   const isFinalBoss = Boolean(tpl.isFinalBoss || spawn.isFinalBoss);
   const tier = isFinalBoss ? 'boss' : spawn.tier || 'normal';
-  const tierMult = tier === 'boss' ? 2.2 : tier === 'champion' ? 1.45 : 1;
-  const levelMult = 1 + (lv - 1) * 0.24;
+  const tierMult = isFinalBoss ? 2.6 : tier === 'boss' ? 2.0 : tier === 'champion' ? 1.55 : 1;
+  const levelMult = 1 + (lv - 1) * 0.28;
   const hp = Math.round(tpl.hp * tierMult * levelMult);
   const prefix = isFinalBoss ? '' : tier === 'boss' ? 'Señor ' : tier === 'champion' ? 'Campeón ' : '';
 
@@ -415,9 +415,11 @@ export function createEnemy(spawn, id) {
     level: lv,
     hp,
     maxHp: hp,
-    damage: tpl.damage.map((d) => Math.round(d * (1 + (lv - 1) * 0.18) * (tier === 'boss' ? 1.35 : 1))),
+    damage: tpl.damage.map((d) =>
+      Math.round(d * (1 + (lv - 1) * 0.25) * (isFinalBoss ? 1.45 : tier === 'boss' ? 1.3 : tier === 'champion' ? 1.2 : 1))
+    ),
     armor: Math.round(tpl.armor * levelMult),
-    speed: tpl.speed * (tier === 'champion' ? 1.12 : 1),
+    speed: tpl.speed * (tier === 'champion' ? 1.15 : 1),
     range: tpl.range,
     xp: Math.round(tpl.xp * tierMult * (1 + (lv - 1) * 0.15)),
     color: isFinalBoss ? '#a855f7' : tier === 'boss' ? '#f97316' : tier === 'champion' ? '#60a5fa' : tpl.color,

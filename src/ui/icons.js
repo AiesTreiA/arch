@@ -22,6 +22,8 @@ export const UI_ICONS = {
   autoEquip: svgWrap('<path d="m12 3 2.5 5 5.5.8-4 3.9.9 5.5L12 15.6l-4.9 2.6.9-5.5-4-3.9 5.5-.8L12 3Z"/>'),
   salvage: svgWrap('<path d="M12 2c2 3 4 5.5 4 8.5a4 4 0 1 1-8 0c0-3 2-5.5 4-8.5Z"/><circle cx="12" cy="14" r="1.5"/>'),
   autoMode: svgWrap('<path d="M13 2 4 14h7l-1 8 10-12h-7l0-8Z"/>'),
+  soundOn: svgWrap('<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>'),
+  soundOff: svgWrap('<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="m22 9-6 6M16 9l6 6"/>'),
 };
 
 export const SLOT_ICONS = {

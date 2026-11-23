@@ -13,6 +13,15 @@ export const TILE_STAIRS_UP = 4;
 
 export const FINAL_FLOOR = 22;
 
+export function isFinalFloorLevel(level) {
+  if (level === -3 || level === 3 || level === 22 || level === FINAL_FLOOR) return true;
+  if (typeof level === 'string') {
+    const s = level.toLowerCase();
+    return s === '-3' || s === '3' || s === '22' || s.includes('final') || s.includes('hades') || s.includes('tartaro');
+  }
+  return false;
+}
+
 export const OVERWORLD_BIOME = {
   id: 'helade',
   name: 'Hélade · Tierra de los Mitos',
@@ -22,20 +31,79 @@ export const OVERWORLD_BIOME = {
   isOverworld: true,
 };
 
+export const ASTRAL_BIOME = {
+  id: 'firmamento_titanes',
+  name: 'Mundo II · El Firmamento de los Titanes',
+  subtitle: 'Islas de mármol cósmico suspendidas, starlight y templos de los Titanes',
+  floor: '#1e1b4b',
+  wall: '#312e81',
+  accent: '#38bdf8',
+  particles: 'starlight',
+  isOverworld: true,
+  isNewWorld: true,
+};
+
 export const FINAL_BIOME = {
   id: 'trono_tartaro',
   name: 'Trono del Tártaro · Morada de Hades',
   floor: '#1f102c',
   wall: '#581c87',
   accent: '#f97316',
+  particles: 'embers',
   isFinalFloor: true,
 };
 
 export const BIOMES = [
-  { id: 'styx', name: 'Umbral del Estigia', floor: '#1b2029', wall: '#313949', accent: '#60a5fa' },
-  { id: 'creta', name: 'Laberinto de Creta', floor: '#26201b', wall: '#4b3d30', accent: '#f59e0b' },
-  { id: 'hefesto', name: 'Forjas de Hefesto', floor: '#281a18', wall: '#522922', accent: '#f97316' },
-  { id: 'tartaro', name: 'Abismo del Tártaro', floor: '#1a1625', wall: '#382b52', accent: '#c084fc' },
+  {
+    id: 'styx',
+    templeId: 'bosque',
+    name: 'Templo del Bosque · Arboledas de Pan',
+    subtitle: 'Halls cubiertos de hiedra, raíces colosales y esporas de hada',
+    floor: '#1b2a20',
+    wall: '#263b2f',
+    accent: '#34d399',
+    particles: 'spores',
+  },
+  {
+    id: 'creta',
+    templeId: 'fuego',
+    name: 'Templo del Fuego · Minas de Hefesto',
+    subtitle: 'Ríos de magma, basalto volcánico y ascuas incandescentes',
+    floor: '#211512',
+    wall: '#451a14',
+    accent: '#f97316',
+    particles: 'embers',
+  },
+  {
+    id: 'agua',
+    templeId: 'agua',
+    name: 'Templo del Agua · Gruta de las Náyades',
+    subtitle: 'Salas sumergidas de mármol turquesa y fuentes sagradas',
+    floor: '#0e2636',
+    wall: '#154e63',
+    accent: '#38bdf8',
+    particles: 'bubbles',
+  },
+  {
+    id: 'hefesto',
+    templeId: 'sombras',
+    name: 'Templo de las Sombras · Catacumbas del Inframundo',
+    subtitle: 'Criptas sepulcrales, cadenas colgantes y fuegos fatuos',
+    floor: '#1b1329',
+    wall: '#382352',
+    accent: '#c084fc',
+    particles: 'wisps',
+  },
+  {
+    id: 'tartaro',
+    templeId: 'espiritu',
+    name: 'Templo del Espíritu · Coloso de las Amazonas',
+    subtitle: 'Arenas doradas del desierto, monolitos solares y obeliscos',
+    floor: '#382714',
+    wall: '#603f23',
+    accent: '#facc15',
+    particles: 'dust',
+  },
 ];
 
 export const OVERWORLD_ZONES = [
@@ -105,10 +173,24 @@ function carveRect(grid, x, y, w, h, value = TILE_FLOOR) {
   }
 }
 
-function carveCorridor(grid, x1, y1, x2, y2, rng) {
+export function carveCircle(grid, cx, cy, radius, value = TILE_FLOOR) {
+  const r2 = radius * radius;
+  const h = grid.length;
+  const w = grid[0].length;
+  for (let gy = Math.max(1, Math.floor(cy - radius)); gy <= Math.min(h - 2, Math.ceil(cy + radius)); gy++) {
+    for (let gx = Math.max(1, Math.floor(cx - radius)); gx <= Math.min(w - 2, Math.ceil(cx + radius)); gx++) {
+      const d2 = (gx - cx) * (gx - cx) + (gy - cy) * (gy - cy);
+      if (d2 <= r2) {
+        grid[gy][gx] = value;
+      }
+    }
+  }
+}
+
+function carveCorridor(grid, x1, y1, x2, y2, rng, corridorWidth = 2) {
   const horizFirst = rng.chance(0.5);
   const carveStep = (x, y) => {
-    carveRect(grid, x, y, 2, 2, TILE_FLOOR);
+    carveRect(grid, x, y, corridorWidth, corridorWidth, TILE_FLOOR);
   };
   let cx = x1;
   let cy = y1;
@@ -434,6 +516,46 @@ function generateOverworld({ width = 48, height = 48, seed = 'arch-1' } = {}) {
     { x: beachChestX + 0.5, y: beachChestY + 0.5, opened: false },
   ];
 
+  // 5b. Fuente de la Gran Hada de Arcadia (Zelda OoT Great Fairy Fountain)
+  const fairyFountains = [
+    {
+      id: 'fairy-arcadia',
+      x: arcadia.cx - 2.5,
+      y: arcadia.cy - 3.5,
+      used: false,
+      name: 'Fuente de la Gran Hada de Arcadia',
+    },
+  ];
+  clearZoneCenter(Math.floor(arcadia.cx - 2.5), Math.floor(arcadia.cy - 3.5), 1, 'meadow');
+
+  // Vasijas de cerámica (Zelda breakable pots) en el mundo exterior
+  const pots = [
+    { id: 'pot-ow-1', x: delfos.cx + 2.5, y: delfos.cy - 1.5, broken: false },
+    { id: 'pot-ow-2', x: delfos.cx + 2.5, y: delfos.cy + 1.5, broken: false },
+    { id: 'pot-ow-3', x: delfos.cx - 2.5, y: delfos.cy - 1.5, broken: false },
+    { id: 'pot-ow-4', x: aqueronte.cx - 1.5, y: aqueronte.cy + 1.5, broken: false },
+    { id: 'pot-ow-5', x: aqueronte.cx + 2.5, y: aqueronte.cy + 2.5, broken: false },
+    { id: 'pot-ow-6', x: arcadia.cx + 1.5, y: arcadia.cy + 2.5, broken: false },
+    { id: 'pot-ow-7', x: arcadia.cx - 1.5, y: arcadia.cy - 1.5, broken: false },
+    { id: 'pot-ow-8', x: beachChestX + 1.5, y: beachChestY - 1.5, broken: false },
+    { id: 'pot-ow-9', x: beachChestX - 1.5, y: beachChestY + 1.5, broken: false },
+    { id: 'pot-ow-10', x: tartaroGate.cx - 2.5, y: tartaroGate.cy - 1.5, broken: false },
+    { id: 'pot-ow-11', x: tartaroGate.cx - 2.5, y: tartaroGate.cy + 1.5, broken: false },
+  ];
+
+  // Maleza y arbustos cortables (Zelda choppable grass/bushes)
+  const bushes = [
+    { id: 'bush-ow-1', x: arcadia.cx - 1.5, y: arcadia.cy + 1.5, cut: false },
+    { id: 'bush-ow-2', x: arcadia.cx + 2.0, y: arcadia.cy - 1.5, cut: false },
+    { id: 'bush-ow-3', x: arcadia.cx - 3.0, y: arcadia.cy + 0.5, cut: false },
+    { id: 'bush-ow-4', x: aqueronte.cx + 1.5, y: aqueronte.cy - 3.5, cut: false },
+    { id: 'bush-ow-5', x: aqueronte.cx - 2.5, y: aqueronte.cy - 2.0, cut: false },
+    { id: 'bush-ow-6', x: delfos.cx - 3.5, y: delfos.cy + 2.0, cut: false },
+    { id: 'bush-ow-7', x: delfos.cx + 3.5, y: delfos.cy - 2.5, cut: false },
+    { id: 'bush-ow-8', x: beachChestX + 2.5, y: beachChestY + 1.5, cut: false },
+    { id: 'bush-ow-9', x: tartaroGate.cx + 2.0, y: tartaroGate.cy - 2.5, cut: false },
+  ];
+
   // 6. Árboles espesos / rocas escenográficas con colisión ligera + Props vivos
   const sceneryProps = [];
   const keyPoints = [
@@ -549,9 +671,35 @@ function generateOverworld({ width = 48, height = 48, seed = 'arch-1' } = {}) {
     }
   }
 
-  // 7. Re-validar conectividad 100% garantizada tras colocar árboles/columnas
+  const abyssStairs = {
+    id: 'foso-tartaro',
+    x: aqueronte.cx + 3,
+    y: aqueronte.cy - 3,
+    targetFloor: -1,
+    label: '▼ Foso del Tártaro (Piso -1 · Camino a Hades)',
+    hint: 'Descender directamente al Tártaro (Piso -1)',
+    isDeadEndBranch: false,
+  };
+  grid[abyssStairs.y][abyssStairs.x] = TILE_STAIRS;
+  terrain[abyssStairs.y][abyssStairs.x] = 'rock';
+
+  const secondaryStairs = {
+    id: 'gruta-egeo',
+    x: beachChestX + 2,
+    y: beachChestY + 2,
+    targetFloor: '1-cripta',
+    label: '⚔ Gruta Prohibida del Egeo (Sin Salida)',
+    hint: 'Entrar a la Cripta Secreta del Egeo (Sin bajada)',
+    isDeadEndBranch: true,
+  };
+  grid[secondaryStairs.y][secondaryStairs.x] = TILE_STAIRS;
+  terrain[secondaryStairs.y][secondaryStairs.x] = 'sand';
+
   ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), stairs.x, stairs.y);
+  ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), abyssStairs.x, abyssStairs.y);
+  ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), secondaryStairs.x, secondaryStairs.y);
   ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), shrine.x, shrine.y);
+  ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), Math.floor(fairyFountains[0].x), Math.floor(fairyFountains[0].y));
   for (const c of chests) {
     ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), Math.floor(c.x), Math.floor(c.y));
   }
@@ -559,7 +707,20 @@ function generateOverworld({ width = 48, height = 48, seed = 'arch-1' } = {}) {
   // Asegurar baldosas clave tras cualquier re-carving
   grid[shrine.y][shrine.x] = TILE_SHRINE;
   grid[stairs.y][stairs.x] = TILE_STAIRS;
+  grid[abyssStairs.y][abyssStairs.x] = TILE_STAIRS;
+  grid[secondaryStairs.y][secondaryStairs.x] = TILE_STAIRS;
   grid[Math.floor(spawn.y)][Math.floor(spawn.x)] = TILE_FLOOR;
+
+  stairs.targetFloor = 2;
+  stairs.label = '▼ Descenso al Inframundo (Piso 2)';
+  stairs.hint = 'Descender al Piso 2';
+  stairs.isDeadEndBranch = false;
+
+  const stairsList = [
+    stairs,
+    abyssStairs,
+    secondaryStairs,
+  ];
 
   // 8. Spawns de enemigos temáticos por zona geográfica
   const enemySpawns = [];
@@ -624,51 +785,387 @@ function generateOverworld({ width = 48, height = 48, seed = 'arch-1' } = {}) {
     spawn,
     npc,
     stairs,
+    stairsList,
     stairsUp: null,
     shrine,
     chests,
     enemySpawns,
+    pots,
+    bushes,
+    fairyFountains,
   };
 }
 
 /**
- * Genera una planta procedural conectada:
- *  - Piso 1: Mundo exterior vivo sobre la tierra (Hélade) con pasto, agua, puentes y zonas míticas.
- *  - Pisos 2–21: Mazmorras del Inframundo a través de sus 4 estratos míticos.
- *  - Piso 22: Trono del Tártaro con el Monstruo Final (Hades, Soberano del Tártaro).
- *  - Pisos 23+: Modo Abismo Infinito si se ha vencido a Hades.
+ * Genera el Mundo II (El Firmamento de los Titanes), un nuevo mundo celestial tras derrotar a Hades.
  */
-export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'arch-1' } = {}) {
+export function generateNewWorld({ width = 48, height = 48, seed = 'arch-world2' } = {}) {
+  const rng = createRng(`${seed}:newworld:2`);
+  const grid = Array.from({ length: height }, () => Array(width).fill(TILE_FLOOR));
+  const explored = Array.from({ length: height }, () => Array(width).fill(0));
+  const terrain = Array.from({ length: height }, () => Array(width).fill('astral_grass'));
+  const elevation = Array.from({ length: height }, () => Array(width).fill(0.1));
+  const zoneGrid = Array.from({ length: height }, () => Array(width).fill('firmamento_wilds'));
+
+  const zones = [
+    {
+      id: 'templo_astral',
+      name: 'Santuario del Alba Primordial',
+      subtitle: 'Explanada astral de los Titanes y campamento estelar',
+      cx: Math.round(width * 0.22),
+      cy: Math.round(height * 0.72),
+      radius: 6,
+      color: '#38bdf8',
+    },
+    {
+      id: 'islas_firmamento',
+      name: 'Meseta de Hiperbórea Flotante',
+      subtitle: 'Islas de mármol suspendidas entre auroras cósmicas',
+      cx: Math.round(width * 0.25),
+      cy: Math.round(height * 0.25),
+      radius: 6,
+      color: '#c084fc',
+    },
+    {
+      id: 'valle_cronos',
+      name: 'Valle de los Titanes Durmientes',
+      subtitle: 'Monolitos estelares y obeliscos de Cronos',
+      cx: Math.round(width * 0.75),
+      cy: Math.round(height * 0.28),
+      radius: 6,
+      color: '#facc15',
+    },
+    {
+      id: 'portal_cosmos',
+      name: 'Puerta de la Eternidad',
+      subtitle: 'Vórtice infinito hacia las constelaciones primigenias',
+      cx: Math.round(width * 0.76),
+      cy: Math.round(height * 0.74),
+      radius: 6,
+      color: '#f43f5e',
+    },
+  ];
+
+  // Riscos perimetrales cósmicos y asignación de zonas
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (x <= 1 || x >= width - 2 || y <= 1 || y >= height - 2) {
+        grid[y][x] = TILE_WALL;
+        terrain[y][x] = 'cliff';
+        elevation[y][x] = 0.8;
+        continue;
+      }
+      for (const z of zones) {
+        if (Math.hypot(x - z.cx, y - z.cy) <= z.radius) {
+          zoneGrid[y][x] = z.id;
+          if (z.id === 'templo_astral') {
+            terrain[y][x] = 'crystal_marble';
+            elevation[y][x] = 0.15;
+          } else if (z.id === 'islas_firmamento') {
+            terrain[y][x] = 'astral_grass';
+            elevation[y][x] = 0.2;
+          } else if (z.id === 'valle_cronos') {
+            terrain[y][x] = 'cosmic_rock';
+            elevation[y][x] = 0.1;
+          } else {
+            terrain[y][x] = 'aether_dirt';
+          }
+        }
+      }
+    }
+  }
+
+  // Río de Starlight cósmico en el centro
+  for (let y = 3; y < height - 3; y++) {
+    const rx = Math.round(width * 0.5 + Math.sin(y * 0.25) * 4);
+    for (let dx = -2; dx <= 2; dx++) {
+      const px = rx + dx;
+      if (px > 2 && px < width - 3) {
+        if (Math.abs(dx) <= 1) {
+          terrain[y][px] = 'starlight_water';
+          grid[y][px] = TILE_WALL;
+        } else {
+          terrain[y][px] = 'crystal_marble';
+          grid[y][px] = TILE_FLOOR;
+        }
+      }
+    }
+  }
+
+  // Puentes cósmicos sobre el río de starlight
+  const bridgeYs = [Math.round(height * 0.35), Math.round(height * 0.65)];
+  for (const by of bridgeYs) {
+    const rx = Math.round(width * 0.5 + Math.sin(by * 0.25) * 4);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const px = rx + dx;
+        const py = by + dy;
+        if (px > 1 && px < width - 2 && py > 1 && py < height - 2) {
+          grid[py][px] = TILE_FLOOR;
+          terrain[py][px] = 'bridge';
+        }
+      }
+    }
+  }
+
+  const spawn = { x: zones[0].cx + 0.5, y: zones[0].cy + 0.5 };
+  const stairs = { x: zones[3].cx, y: zones[3].cy };
+  grid[stairs.y][stairs.x] = TILE_STAIRS;
+
+  const secondaryStairs = {
+    x: zones[1].cx,
+    y: zones[1].cy,
+    targetFloor: 'm2-cripta',
+    label: '⚔ Cámara Astral de Cronos (Sin Salida)',
+    hint: 'Entrar a la Bóveda de Cronos (Sin bajada)',
+    isDeadEndBranch: true,
+  };
+  grid[secondaryStairs.y][secondaryStairs.x] = TILE_STAIRS;
+
+  const stairsList = [
+    {
+      id: 'abismo-cosmos',
+      x: stairs.x,
+      y: stairs.y,
+      targetFloor: 'abismo-cosmos',
+      label: '▼ Puerta de la Eternidad',
+      hint: 'Avanzar al Abismo Celestial',
+      isDeadEndBranch: false,
+    },
+    secondaryStairs,
+  ];
+
+  const shrine = { x: zones[2].cx, y: zones[2].cy, used: false };
+  grid[shrine.y][shrine.x] = TILE_SHRINE;
+
+  const npc = {
+    name: 'Sibila Cósmica del Alba',
+    x: zones[0].cx + 1.5,
+    y: zones[0].cy - 0.5,
+    talked: false,
+  };
+
+  const chests = [
+    { x: zones[1].cx + 2.5, y: zones[1].cy + 1.5, opened: false },
+    { x: zones[2].cx - 2.5, y: zones[2].cy - 1.5, opened: false },
+    { x: zones[3].cx - 2.5, y: zones[3].cy + 1.5, opened: false },
+  ];
+
+  const fairyFountains = [
+    {
+      id: 'fairy-astral',
+      x: zones[1].cx - 2.5,
+      y: zones[1].cy - 2.5,
+      used: false,
+      name: 'Gran Hada del Firmamento Cósmico',
+    },
+  ];
+
+  const pots = [
+    { id: 'pot-m2-1', x: zones[0].cx + 2.5, y: zones[0].cy + 1.5, broken: false },
+    { id: 'pot-m2-2', x: zones[2].cx + 1.5, y: zones[2].cy - 2.5, broken: false },
+  ];
+  const bushes = [
+    { id: 'bush-m2-1', x: zones[0].cx - 2.5, y: zones[0].cy - 1.5, cut: false },
+    { id: 'bush-m2-2', x: zones[1].cx + 1.5, y: zones[1].cy + 2.5, cut: false },
+  ];
+
+  const enemySpawns = [
+    { x: zones[1].cx + 1, y: zones[1].cy - 1, kind: 'satyr', tier: 'champion', level: 5 },
+    { x: zones[1].cx - 1, y: zones[1].cy + 2, kind: 'harpy', tier: 'champion', level: 5 },
+    { x: zones[2].cx + 2, y: zones[2].cy + 1, kind: 'skeleton', tier: 'champion', level: 6 },
+    { x: zones[2].cx - 2, y: zones[2].cy - 1, kind: 'satyr', tier: 'champion', level: 6 },
+    { x: zones[3].cx - 2, y: zones[3].cy - 2, kind: 'minotaur', tier: 'boss', level: 7 },
+  ];
+
+  const ambientCritters = [];
+  for (let i = 0; i < 14; i++) {
+    ambientCritters.push({
+      kind: 'firefly',
+      x: zones[0].cx + (rng.next() - 0.5) * 12,
+      y: zones[0].cy + (rng.next() - 0.5) * 12,
+      color: 0x38bdf8,
+      phase: rng.next() * Math.PI * 2,
+    });
+  }
+
+  ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), stairs.x, stairs.y);
+  ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), secondaryStairs.x, secondaryStairs.y);
+  ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), shrine.x, shrine.y);
+  for (const c of chests) {
+    ensurePathConnected(grid, terrain, Math.floor(spawn.x), Math.floor(spawn.y), Math.floor(c.x), Math.floor(c.y));
+  }
+
+  grid[stairs.y][stairs.x] = TILE_STAIRS;
+  grid[secondaryStairs.y][secondaryStairs.x] = TILE_STAIRS;
+  grid[shrine.y][shrine.x] = TILE_SHRINE;
+  grid[Math.floor(spawn.y)][Math.floor(spawn.x)] = TILE_FLOOR;
+
+  return {
+    width,
+    height,
+    level: 'mundo-2',
+    isOverworld: true,
+    isNewWorld: true,
+    isFinalFloor: false,
+    biome: ASTRAL_BIOME,
+    grid,
+    terrain,
+    elevation,
+    zoneGrid,
+    zones,
+    sceneryProps: [],
+    ambientCritters,
+    explored,
+    rooms: zones,
+    spawn,
+    npc,
+    stairs,
+    stairsList,
+    stairsUp: null,
+    shrine,
+    chests,
+    enemySpawns,
+    pots,
+    bushes,
+    fairyFountains,
+  };
+}
+
+/**
+ * Genera una planta procedural conectada con geometrías ricas y variadas:
+ *  - Grandes Plazas Abiertas (16x16 a 20x20 con columnas)
+ *  - Salas circulares/rotundas y pasillos anchos
+ *  - Múltiples bajadas en cada piso (algunas hacia pisos sin bajada)
+ *  - Monstruo Final Hades en el Piso -3 (o 22) en el Trono del Tártaro
+ */
+export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'arch-1', parentFloor = null, isDeadEnd: forceDeadEnd = false } = {}) {
   if (level === 1) {
     return generateOverworld({ width, height, seed });
   }
+  if (level === 'mundo-2' || level === 'world2' || level === 100) {
+    return generateNewWorld({ width, height, seed });
+  }
 
+  const isFinal = isFinalFloorLevel(level);
+  const isDeadEnd = Boolean(
+    forceDeadEnd ||
+    (typeof level === 'string' &&
+      (level.includes('cripta') || level.includes('fragua') || level.includes('boveda') || level.includes('dead')))
+  );
+
+  const numLv = typeof level === 'number' ? level : parseInt(level, 10);
+  const absLevel = Math.max(1, Math.abs(Number.isFinite(numLv) ? numLv : (isFinal ? 3 : 2)));
   const rng = createRng(`${seed}:floor:${level}`);
   const grid = Array.from({ length: height }, () => Array(width).fill(TILE_WALL));
   const explored = Array.from({ length: height }, () => Array(width).fill(0));
   const rooms = [];
-  const targetRooms = level === FINAL_FLOOR ? 10 : Math.min(13, 7 + level);
 
-  for (let attempt = 0; attempt < 180 && rooms.length < targetRooms; attempt++) {
-    const rw = level === FINAL_FLOOR && rooms.length === targetRooms - 1 ? rng.int(8, 10) : rng.int(5, 9);
-    const rh = level === FINAL_FLOOR && rooms.length === targetRooms - 1 ? rng.int(8, 10) : rng.int(5, 9);
-    const rx = rng.int(2, Math.max(3, width - rw - 3));
-    const ry = rng.int(2, Math.max(3, height - rh - 3));
-    const candidate = {
-      x: rx,
-      y: ry,
-      w: rw,
-      h: rh,
-      cx: Math.floor(rx + rw / 2),
-      cy: Math.floor(ry + rh / 2),
+  // Variabilidad geométrica: Plazas abiertas, arenas de Hades, criptas de bóveda o salas circulares
+  let layoutType = 'grand_plaza';
+  if (isFinal) {
+    layoutType = 'throne_arena';
+  } else if (isDeadEnd) {
+    layoutType = 'vault_crypt';
+  } else {
+    const archetypes = ['grand_plaza', 'circular_sanctum', 'organic_caverns', 'crossroad'];
+    layoutType = archetypes[absLevel % archetypes.length];
+  }
+
+  if (layoutType === 'throne_arena') {
+    // Piso -3: Colosal Trono de Hades (20x20 open arena con columnas de obsidiana y braseros)
+    const throneW = 20;
+    const throneH = 20;
+    const tx = Math.floor((width - throneW) / 2);
+    const ty = Math.floor((height - throneH) / 2);
+    carveRect(grid, tx, ty, throneW, throneH, TILE_FLOOR);
+    const throneRoom = {
+      x: tx, y: ty, w: throneW, h: throneH, cx: Math.floor(tx + throneW / 2), cy: Math.floor(ty + throneH / 2), isThrone: true
     };
-    if (!rooms.some((r) => roomsOverlap(r, candidate, 2))) {
-      carveRect(grid, candidate.x, candidate.y, candidate.w, candidate.h, TILE_FLOOR);
-      if (rooms.length > 0) {
+
+    // Columnas de obsidiana simétricas dentro del Trono de Hades
+    for (const [colX, colY] of [
+      [tx + 4, ty + 5], [tx + throneW - 5, ty + 5],
+      [tx + 4, ty + throneH - 6], [tx + throneW - 5, ty + throneH - 6],
+    ]) {
+      grid[colY][colX] = TILE_WALL;
+    }
+
+    // Antecámara de entrada
+    const enterW = 10;
+    const enterH = 8;
+    const ex = tx;
+    const ey = Math.max(2, ty - enterH - 2);
+    carveRect(grid, ex, ey, enterW, enterH, TILE_FLOOR);
+    const enterRoom = {
+      x: ex, y: ey, w: enterW, h: enterH, cx: Math.floor(ex + enterW / 2), cy: Math.floor(ey + enterH / 2)
+    };
+    carveCorridor(grid, enterRoom.cx, enterRoom.cy, throneRoom.cx, throneRoom.y, rng, 3);
+    rooms.push(enterRoom, throneRoom);
+  } else if (layoutType === 'vault_crypt') {
+    // Piso sin bajada (Cripta / Bóveda cerrada): Gran cámara central de tesoro y cámaras de guardias
+    const vaultSize = 14;
+    const vx = Math.floor((width - vaultSize) / 2);
+    const vy = Math.floor((height - vaultSize) / 2);
+    carveRect(grid, vx, vy, vaultSize, vaultSize, TILE_FLOOR);
+    const vaultRoom = {
+      x: vx, y: vy, w: vaultSize, h: vaultSize, cx: Math.floor(vx + vaultSize / 2), cy: Math.floor(vy + vaultSize / 2), isVault: true
+    };
+    rooms.push(vaultRoom);
+
+    // 3 cámaras satélite
+    const offsets = [[-10, 0], [10, 0], [0, 10]];
+    for (const [ox, oy] of offsets) {
+      const cx = Math.max(3, Math.min(width - 9, vaultRoom.cx + ox - 4));
+      const cy = Math.max(3, Math.min(height - 9, vaultRoom.cy + oy - 4));
+      const rw = rng.int(7, 9);
+      const rh = rng.int(7, 9);
+      carveRect(grid, cx, cy, rw, rh, TILE_FLOOR);
+      const r = { x: cx, y: cy, w: rw, h: rh, cx: Math.floor(cx + rw / 2), cy: Math.floor(cy + rh / 2) };
+      carveCorridor(grid, vaultRoom.cx, vaultRoom.cy, r.cx, r.cy, rng, 3);
+      rooms.push(r);
+    }
+  } else {
+    // Geometría diversa: Plazas abiertas gigantes (16x16 a 18x18), salas circulares y amplios corredores
+    const targetRooms = Math.min(10, 6 + (absLevel % 4));
+    // 1. Sala monumental abierta (Gran Plaza de 16x16 a 18x18)
+    const plazaW = rng.int(15, 18);
+    const plazaH = rng.int(15, 18);
+    const px = rng.int(3, Math.max(4, width - plazaW - 4));
+    const py = rng.int(3, Math.max(4, height - plazaH - 4));
+    carveRect(grid, px, py, plazaW, plazaH, TILE_FLOOR);
+    // Columnas interiores en la plaza que dejan enormes pasillos de combate abiertos
+    for (const [ox, oy] of [
+      [px + 3, py + 3], [px + plazaW - 4, py + 3],
+      [px + 3, py + plazaH - 4], [px + plazaW - 4, py + plazaH - 4],
+    ]) {
+      grid[oy][ox] = TILE_WALL;
+    }
+    const plazaRoom = {
+      x: px, y: py, w: plazaW, h: plazaH, cx: Math.floor(px + plazaW / 2), cy: Math.floor(py + plazaH / 2), isPlaza: true
+    };
+    rooms.push(plazaRoom);
+
+    // 2. Salas adicionales (circulares o rectangulares amplias)
+    for (let attempt = 0; attempt < 160 && rooms.length < targetRooms; attempt++) {
+      const isCircular = layoutType === 'circular_sanctum' && rng.chance(0.65);
+      const rw = rng.int(7, 11);
+      const rh = rng.int(7, 11);
+      const rx = rng.int(2, Math.max(3, width - rw - 3));
+      const ry = rng.int(2, Math.max(3, height - rh - 3));
+      const candidate = {
+        x: rx, y: ry, w: rw, h: rh, cx: Math.floor(rx + rw / 2), cy: Math.floor(ry + rh / 2)
+      };
+      if (!rooms.some((r) => roomsOverlap(r, candidate, 2))) {
+        if (isCircular) {
+          carveCircle(grid, candidate.cx, candidate.cy, Math.floor(Math.min(rw, rh) / 2));
+        } else {
+          carveRect(grid, candidate.x, candidate.y, candidate.w, candidate.h, TILE_FLOOR);
+        }
         const prev = rooms[rooms.length - 1];
-        carveCorridor(grid, prev.cx, prev.cy, candidate.cx, candidate.cy, rng);
+        carveCorridor(grid, prev.cx, prev.cy, candidate.cx, candidate.cy, rng, 3);
+        rooms.push(candidate);
       }
-      rooms.push(candidate);
     }
   }
 
@@ -689,12 +1186,56 @@ export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'ar
     }
   }
 
-  grid[exitRoom.cy][exitRoom.cx] = TILE_STAIRS;
+  // Escalera de ascenso
   const stairsUp = {
     x: Math.max(startRoom.x, startRoom.cx - 2),
     y: startRoom.cy,
   };
   grid[stairsUp.y][stairsUp.x] = TILE_STAIRS_UP;
+
+  let stairs = null;
+  const stairsList = [];
+
+  if (isDeadEnd) {
+    // PISO SIN BAJADA (Cripta / Bóveda cerrada): no tiene escaleras hacia abajo
+    stairs = null;
+  } else {
+    // PISO CON BAJADA
+    grid[exitRoom.cy][exitRoom.cx] = TILE_STAIRS;
+    let nextMainFloor;
+    if (level === -1) nextMainFloor = -2;
+    else if (level === -2) nextMainFloor = -3;
+    else if (typeof level === 'number' && level > 0) nextMainFloor = level + 1;
+    else nextMainFloor = -3;
+
+    stairs = {
+      x: exitRoom.cx,
+      y: exitRoom.cy,
+      targetFloor: nextMainFloor,
+      label: nextMainFloor === -3 ? '▼ Tártaro (Piso -3 · Hades)' : `▼ Descenso (Piso ${nextMainFloor})`,
+      hint: nextMainFloor === -3 ? 'Descender al Trono del Tártaro (Piso -3 · Monstruo Final)' : `Descender al Piso ${nextMainFloor}`,
+      isDeadEndBranch: false,
+    };
+    stairsList.push(stairs);
+
+    // Agregar SEGUNDA BAJADA hacia un piso que NO tiene bajada (Cripta/Bóveda sin salida)
+    if (!isFinal && rooms.length >= 3) {
+      const sideRoom = rooms.find((r) => r !== startRoom && r !== exitRoom) || rooms[1];
+      const sideTarget = `${level}-cripta`;
+      const sideX = Math.min(sideRoom.x + sideRoom.w - 2, Math.max(sideRoom.x + 1, sideRoom.cx + 2));
+      const sideY = sideRoom.cy;
+      grid[sideY][sideX] = TILE_STAIRS;
+      const sideStairs = {
+        x: sideX,
+        y: sideY,
+        targetFloor: sideTarget,
+        label: '⚔ Cripta Oculta (Sin Salida)',
+        hint: 'Entrar a Cripta Profunda (Piso sin bajada)',
+        isDeadEndBranch: true,
+      };
+      stairsList.push(sideStairs);
+    }
+  }
 
   let shrine = null;
   if (rooms.length >= 3) {
@@ -712,36 +1253,45 @@ export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'ar
   for (let idx = 1; idx < rooms.length; idx++) {
     const r = rooms[idx];
     const isBossRoom = r === exitRoom;
-    const count = isBossRoom ? (level === FINAL_FLOOR ? 3 : rng.int(2, 3)) : rng.int(2, 4 + Math.min(2, level - 1));
+    const count = isBossRoom ? (isFinal ? 4 : rng.int(3, 4)) : rng.int(2, 5 + Math.min(2, absLevel - 1));
     for (let i = 0; i < count; i++) {
       const ex = rng.int(r.x + 1, r.x + r.w - 2);
       const ey = rng.int(r.y + 1, r.y + r.h - 2);
-      if (ex === exitRoom.cx && ey === exitRoom.cy && !isBossRoom) continue;
+      if (stairs && ex === stairs.x && ey === stairs.y && !isBossRoom) continue;
 
-      if (level === FINAL_FLOOR && isBossRoom && i === 0) {
-        // Piso 22: Monstruo Final Hades en el Trono del Tártaro
-        const bx = ex === exitRoom.cx ? Math.max(r.x + 1, ex - 1) : ex;
+      if (isFinal && isBossRoom && i === 0) {
+        // MONSTRUO FINAL HADES EN PISO -3 (o 22)
+        const bx = ex === exitRoom.cx ? Math.max(r.x + 2, ex - 1) : ex;
         enemySpawns.push({
           x: bx + 0.5,
           y: ey + 0.5,
           kind: 'hades',
           tier: 'boss',
           isFinalBoss: true,
-          level,
+          level: absLevel,
+        });
+      } else if (isDeadEnd && r.isVault && i === 0) {
+        // Jefe Guardián de la Cripta sin salida
+        enemySpawns.push({
+          x: ex + 0.5,
+          y: ey + 0.5,
+          kind: 'minotaur',
+          tier: 'boss',
+          level: absLevel + 1,
         });
       } else {
         const isBoss = isBossRoom && i === 0;
-        const isChampion = !isBoss && rng.chance(Math.min(0.45, 0.18 + level * 0.015));
+        const isChampion = !isBoss && rng.chance(Math.min(0.5, 0.22 + absLevel * 0.02));
         enemySpawns.push({
           x: ex + 0.5,
           y: ey + 0.5,
           kind: isBoss ? 'minotaur' : rng.pick(archetypePool),
           tier: isBoss ? 'boss' : isChampion ? 'champion' : 'normal',
-          level,
+          level: absLevel,
         });
       }
     }
-    if (!isBossRoom && rng.chance(0.45)) {
+    if (isDeadEnd || (!isBossRoom && rng.chance(0.45))) {
       chests.push({
         x: r.cx + 0.5,
         y: r.cy + 0.5,
@@ -758,41 +1308,108 @@ export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'ar
       opened: false,
     });
   }
+  if (isDeadEnd && chests.length < 2) {
+    const vRoom = rooms.find((r) => r.isVault) || rooms[0];
+    chests.push({
+      x: vRoom.cx + 1.5,
+      y: vRoom.cy - 1.5,
+      opened: false,
+    });
+  }
+
+  // Vasijas rompibles de cerámica y maleza en mazmorras
+  const pots = [];
+  const bushes = [];
+  for (let idx = 0; idx < rooms.length; idx++) {
+    const r = rooms[idx];
+    if (r.w >= 4 && r.h >= 4) {
+      pots.push({
+        id: `pot-${level}-${idx}-1`,
+        x: r.x + 1.5,
+        y: r.y + 1.5,
+        broken: false,
+      });
+      if (r.w >= 6 && rng.chance(0.65)) {
+        pots.push({
+          id: `pot-${level}-${idx}-2`,
+          x: r.x + r.w - 1.5,
+          y: r.y + 1.5,
+          broken: false,
+        });
+      }
+    }
+    if (r !== exitRoom && r !== startRoom && rng.chance(0.45)) {
+      bushes.push({
+        id: `bush-${level}-${idx}`,
+        x: r.cx + (rng.chance(0.5) ? 1.5 : -1.5),
+        y: r.cy + (rng.chance(0.5) ? 1.5 : -1.5),
+        cut: false,
+      });
+    }
+  }
 
   const npc = {
-    name: level === FINAL_FLOOR ? 'Oráculo de Perséfone' : 'Sombra de Tiresias',
+    name: isFinal ? 'Oráculo de Perséfone' : isDeadEnd ? 'Alma de Hoplita Atrapado' : 'Sombra de Tiresias',
     x: Math.min(startRoom.x + startRoom.w - 1.5, startRoom.cx + 1.5),
     y: startRoom.cy + 0.5,
     talked: false,
   };
 
   let biome;
-  if (level === FINAL_FLOOR) {
+  if (isFinal) {
     biome = FINAL_BIOME;
-  } else if (level <= FINAL_FLOOR) {
-    biome = BIOMES[Math.min(BIOMES.length - 1, Math.floor((level - 2) / 5))];
+  } else if (isDeadEnd) {
+    biome = {
+      ...BIOMES[3],
+      name: 'Cripta Sepulcral de los Caídos (Sin Salida)',
+      subtitle: 'Cámara mortuoria cerrada · Riquezas y guardianes de las sombras',
+    };
+  } else if (typeof level === 'number' && level < 0) {
+    const idx = Math.min(BIOMES.length - 1, Math.max(0, Math.abs(level) - 1));
+    biome = BIOMES[idx];
+  } else if (typeof level === 'number' && level >= 2 && level <= FINAL_FLOOR) {
+    biome = BIOMES[Math.min(BIOMES.length - 1, Math.floor((level - 2) / 4))];
   } else {
-    const baseBiome = BIOMES[(level - 2) % BIOMES.length];
+    const baseBiome = BIOMES[(absLevel - 2) % BIOMES.length];
     biome = { ...baseBiome, name: `${baseBiome.name} (Abismo)` };
+  }
+
+  // Fuentes de las Grandes Hadas en pisos clave (cada 5 pisos)
+  const fairyFountains = [];
+  if ((level % 5 === 0 || absLevel % 5 === 0) && rooms.length >= 3) {
+    const fRoom = rooms[1] !== exitRoom ? rooms[1] : rooms[0];
+    fairyFountains.push({
+      id: `fairy-${level}`,
+      x: fRoom.cx + 0.5,
+      y: fRoom.cy + 0.5,
+      used: false,
+      name: `Gran Hada del ${biome.name}`,
+    });
   }
 
   return {
     width,
     height,
     level,
+    parentFloor,
     isOverworld: false,
-    isFinalFloor: level === FINAL_FLOOR,
+    isFinalFloor: isFinal,
+    isDeadEnd,
     biome,
     grid,
     explored,
     rooms,
     spawn: { x: startRoom.cx + 0.5, y: startRoom.cy + 0.5 },
     npc,
-    stairs: { x: exitRoom.cx, y: exitRoom.cy },
+    stairs,
+    stairsList,
     stairsUp,
     shrine,
     chests,
     enemySpawns,
+    pots,
+    bushes,
+    fairyFountains,
   };
 }
 

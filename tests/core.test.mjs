@@ -770,8 +770,374 @@ test('Modo Auto auto-equipa objetos mejores, auto-ofrenda inferiores al recogerl
   assert.equal(hero.inventory.length, 0, 'El objeto inferior no debe ocupar espacio en la mochila');
 });
 
+test('variabilidad de mundos estilo Zelda Ocarina of Time: 5 Templos (pisos 2–21), vasijas rompibles, arbustos y Fuentes de Hadas', async () => {
+  const { BIOMES, FINAL_BIOME } = await import('../src/core/dungeon.js');
+  assert.equal(BIOMES.length, 5, 'Deben existir 5 Templos clásicos en BIOMES');
+  assert.equal(FINAL_BIOME.id, 'trono_tartaro', 'El bioma final debe ser el Trono del Tártaro');
 
+  // 1. Verificación de asignación de los 5 Templos clásicos de Zelda OoT
+  const templeMap = [
+    { floor: 2, templeId: 'bosque', title: 'Templo del Bosque', particle: 'spores' },
+    { floor: 5, templeId: 'bosque', title: 'Templo del Bosque', particle: 'spores' },
+    { floor: 6, templeId: 'fuego', title: 'Templo del Fuego', particle: 'embers' },
+    { floor: 9, templeId: 'fuego', title: 'Templo del Fuego', particle: 'embers' },
+    { floor: 10, templeId: 'agua', title: 'Templo del Agua', particle: 'bubbles' },
+    { floor: 13, templeId: 'agua', title: 'Templo del Agua', particle: 'bubbles' },
+    { floor: 14, templeId: 'sombras', title: 'Templo de las Sombras', particle: 'wisps' },
+    { floor: 17, templeId: 'sombras', title: 'Templo de las Sombras', particle: 'wisps' },
+    { floor: 18, templeId: 'espiritu', title: 'Templo del Espíritu', particle: 'dust' },
+    { floor: 21, templeId: 'espiritu', title: 'Templo del Espíritu', particle: 'dust' },
+    { floor: 22, templeId: 'trono_tartaro', title: 'Trono del Tártaro', particle: 'embers' },
+  ];
 
+  for (const { floor, templeId, title, particle } of templeMap) {
+    const dungeon = generateDungeon({ width: 38, height: 38, level: floor, seed: `zelda-test-${floor}` });
+    const currentTemple = dungeon.biome.templeId || dungeon.biome.id;
+    assert.equal(currentTemple, templeId, `Piso ${floor} debe pertenecer a ${templeId}`);
+    assert.ok(dungeon.biome.name.includes(title), `Piso ${floor} (${dungeon.biome.name}) debe incluir ${title}`);
+    assert.equal(dungeon.biome.particles || dungeon.biome.ambientParticle, particle, `Piso ${floor} debe tener partículas ambientales ${particle}`);
+    assert.ok(dungeon.pots && dungeon.pots.length > 0, `Piso ${floor} debe generar vasijas rompibles`);
+  }
 
+  // 2. Overworld (Piso 1) genera fuentes de hadas conectadas y elementos destructibles
+  const overworld = generateDungeon({ width: 48, height: 48, level: 1, seed: 'zelda-overworld-props' });
+  assert.ok(overworld.pots && overworld.pots.length >= 6, 'Overworld debe generar vasijas cerámicas');
+  assert.ok(overworld.bushes && overworld.bushes.length >= 8, 'Overworld debe generar arbustos cortables');
+  assert.ok(overworld.fairyFountains && overworld.fairyFountains.length >= 1, 'Overworld debe generar al menos 1 Fuente de Gran Hada');
 
+  const fountain = overworld.fairyFountains[0];
+  assert.equal(isWalkable(overworld, fountain.x, fountain.y), true, 'La fuente de hada debe estar en casilla transitable');
 
+  // 3. Modelos 3D de elementos de mundo Zelda
+  const { createPotMesh3D, createBushMesh3D, createFairyFountain3D } = await import('../src/game/models3d.js');
+  const potMesh = createPotMesh3D({ x: 5, y: 5 });
+  assert.ok(potMesh?.isGroup && potMesh.children.length >= 3, 'El modelo 3D de vasija debe tener cuerpo, cuello y borde');
+
+  const bushMesh = createBushMesh3D({ x: 6, y: 6 });
+  assert.ok(bushMesh?.isGroup && bushMesh.children.length >= 4, 'El arbusto 3D debe tener follaje exuberante');
+
+  const fairyMesh = createFairyFountain3D(fountain);
+  assert.ok(fairyMesh?.isGroup && fairyMesh.userData?.wings, 'La fuente de la Gran Hada 3D debe incluir alas articuladas y orbe');
+});
+
+test('sistema de animaciones y combate estilo Zelda OoT: combos de 3 pasos, estelas de corte, retroceso físico, hitstop y bloqueo de escudo', async () => {
+  const { ArchGame } = await import('../src/game/engine.js');
+  const { createHero } = await import('../src/core/combat.js');
+
+  const vfxCalls = [];
+  const mockRenderer = {
+    triggerHeroAttack: (arg) => vfxCalls.push({ type: 'heroAttack', ...arg }),
+    triggerHitImpactVFX: (arg) => vfxCalls.push({ type: 'hitImpact', ...arg }),
+    triggerHeroHurt: (arg) => vfxCalls.push({ type: 'heroHurt', ...arg }),
+    triggerEnemyDeath: (arg) => vfxCalls.push({ type: 'enemyDeath', ...arg }),
+    triggerPotBreak: (arg) => vfxCalls.push({ type: 'potBreak', ...arg }),
+    triggerBushCut: (arg) => vfxCalls.push({ type: 'bushCut', ...arg }),
+    triggerFairyBlessing: (arg) => vfxCalls.push({ type: 'fairyBlessing', ...arg }),
+  };
+
+  const hero = createHero('campeon', 'Link');
+  const testDungeon = {
+    width: 20,
+    height: 20,
+    grid: Array.from({ length: 20 }, () => Array(20).fill(1)),
+    explored: Array.from({ length: 20 }, () => Array(20).fill(2)),
+    pots: [{ x: 5, y: 5, broken: false }],
+    bushes: [{ x: 6, y: 5, cut: false }],
+    fairyFountains: [{ x: 14, y: 14, visited: false }],
+    chests: [],
+  };
+
+  const game = {
+    hero,
+    floor: 2,
+    dungeon: testDungeon,
+    pos: { x: 5.2, y: 5.2 },
+    cam: { x: 0, y: 0 },
+    enemies: [],
+    projectiles: [],
+    floaters: [],
+    log: [],
+    groundDrops: [],
+    renderer3d: mockRenderer,
+    lastAimDir: { x: 1, y: 0 },
+    attackCdLeft: 0,
+    comboStep: 0,
+    lastAttackTs: 0,
+    hitStopTimer: 0,
+    shakeScreen: () => {},
+    addFloater: (x, y, text, color) => game.floaters.push({ x, y, text, color }),
+    addLog: (msg) => game.log.push(msg),
+    _notify: () => {},
+    _advanceQuest: () => {},
+    _nearestEnemy: () => null,
+    _hasManualMoveInput: () => false,
+    _aimFallbackTarget: () => ({ x: game.pos.x + 1, y: game.pos.y }),
+    interactNearby: ArchGame.prototype.interactNearby,
+    getNearbyInteractable: ArchGame.prototype.getNearbyInteractable,
+    _strikePotsAndBushes: ArchGame.prototype._strikePotsAndBushes,
+    basicAttackNearest: ArchGame.prototype.basicAttackNearest,
+    _strikeEnemy: ArchGame.prototype._strikeEnemy,
+    _onEnemyKilled: ArchGame.prototype._onEnemyKilled,
+  };
+
+  // 1. Progresión del combo de 3 pasos (comboStep 0 -> 1 -> 2 -> 0)
+  game.basicAttackNearest({ allowInteract: false });
+  assert.equal(game.comboStep, 0, 'El primer ataque inicia en comboStep 0');
+  game.attackCdLeft = 0;
+  game.basicAttackNearest({ allowInteract: false });
+  assert.equal(game.comboStep, 1, 'El segundo ataque rápido avanza a comboStep 1');
+  game.attackCdLeft = 0;
+  game.basicAttackNearest({ allowInteract: false });
+  assert.equal(game.comboStep, 2, 'El tercer ataque concluye en el finisher comboStep 2');
+  game.attackCdLeft = 0;
+  game.basicAttackNearest({ allowInteract: false });
+  assert.equal(game.comboStep, 0, 'El ciclo recomienza en 0');
+
+  // 2. Destrucción de vasijas y corte de arbustos cercanos
+  assert.equal(testDungeon.pots[0].broken, true, 'La vasija cercana debe romperse con el tajo');
+  assert.equal(testDungeon.bushes[0].cut, true, 'El arbusto cercano debe cortarse con el tajo');
+  assert.ok(vfxCalls.some((c) => c.type === 'potBreak'), 'Debe emitirse VFX de fragmentación de vasija');
+  assert.ok(vfxCalls.some((c) => c.type === 'bushCut'), 'Debe emitirse VFX de hojas volando');
+
+  // 3. Interacción con la Fuente de la Gran Hada
+  hero.hp = 10;
+  hero.mana = 5;
+  game.pos = { x: 14.1, y: 14.1 };
+  const interactable = game.getNearbyInteractable();
+  assert.equal(interactable?.kind, 'fairy', 'Debe detectar a la Gran Hada como interactuable');
+  const interacted = game.interactNearby();
+  assert.equal(interacted, true);
+  const derived = computeHeroDerived(hero);
+  assert.equal(hero.hp, derived.maxHp, 'La Gran Hada debe restaurar la salud al máximo');
+  assert.equal(hero.mana, derived.maxMana, 'La Gran Hada debe restaurar el fervor al máximo');
+  assert.ok(hero.buffs?.shieldUntil > Date.now(), 'Debe otorgar la Égida protectora');
+  assert.ok(vfxCalls.some((c) => c.type === 'fairyBlessing'), 'Debe emitir VFX de bendición de hada');
+
+  // 4. Retroceso físico direccional, chispas e hitstop al golpear enemigos
+  const enemy = { id: 'e1', x: 10, y: 10, hp: 100, armor: 0, level: 1, xp: 20, tier: 'normal' };
+  game.pos = { x: 9.5, y: 10 };
+  const prevX = enemy.x;
+  const res = game._strikeEnemy(enemy, { minDamage: 40, maxDamage: 50, critChance: 1.0, stats: { dexterity: 50 }, lifeOnHit: 0, rng: () => 0 });
+  assert.ok(enemy.x > prevX, 'El enemigo debe sufrir retroceso físico (knockback) en la dirección del impacto');
+  assert.ok(game.hitStopTimer > 0, 'Un golpe crítico debe activar hitstop (micro-pausa)');
+  assert.ok(vfxCalls.some((c) => c.type === 'hitImpact' && c.isCrit), 'Debe disparar destello de estrella y chispas de impacto');
+
+  // 5. Animación dramática de disolución y muerte de enemigos
+  enemy.hp = 0;
+  game._onEnemyKilled(enemy);
+  assert.ok(vfxCalls.some((c) => c.type === 'enemyDeath'), 'La muerte de un enemigo debe llamar a triggerEnemyDeath');
+});
+
+test('balance de dificultad: los enemigos tienen mayor poder, estadísticas amenazantes y escalan agresivamente', async () => {
+  const { ENEMY_TEMPLATES, createEnemy } = await import('../src/core/combat.js');
+
+  // Verificar que los enemigos básicos tienen estadísticas notablemente amenazantes
+  assert.ok(ENEMY_TEMPLATES.skeleton.hp >= 50, 'Esqueletos deben tener HP significativo (>= 50)');
+  assert.ok(ENEMY_TEMPLATES.skeleton.damage[0] >= 10, 'Esqueletos deben infligir daño amenazante (minDamage >= 10)');
+  assert.ok(ENEMY_TEMPLATES.harpy.speed >= 3.3, 'Arpías deben ser rápidas y ágiles (speed >= 3.3)');
+  assert.ok(ENEMY_TEMPLATES.minotaur.hp >= 200, 'Minotauro (jefe) debe tener HP masivo (>= 200)');
+  assert.ok(ENEMY_TEMPLATES.hades.hp >= 700, 'Hades debe ser un desafío supremo de fin de juego (HP >= 700)');
+  assert.ok(ENEMY_TEMPLATES.hades.damage[1] >= 50, 'Hades debe tener un ataque devastador (maxDamage >= 50)');
+
+  // Probar escalado con niveles negativos y positivos
+  const enemyNeg = createEnemy({ x: 5, y: 5, kind: 'skeleton', level: -2, tier: 'champion' });
+  assert.ok(enemyNeg.maxHp > ENEMY_TEMPLATES.skeleton.hp, 'Enemigo en nivel negativo debe escalar con abs(level)');
+  assert.ok(enemyNeg.damage[1] > ENEMY_TEMPLATES.skeleton.damage[1], 'Daño de campeón debe escalar');
+});
+
+test('múltiples bajadas por piso, pisos sin bajada (dead-end crypts) y geometrías diversas con amplios espacios abiertos', async () => {
+  const { generateDungeon } = await import('../src/core/dungeon.js');
+
+  // 1. Overworld (Piso 1) tiene múltiples bajadas (al menos 3: Piso 2, Foso del Tártaro -1, y Gruta del Egeo sin salida)
+  const ow = generateDungeon({ level: 1, width: 50, height: 50, seed: 'overworld-multi' });
+  assert.ok(ow.stairsList.length >= 2, 'El overworld debe tener 2 o más bajadas');
+  const deadEndOwStairs = ow.stairsList.find((s) => s.isDeadEndBranch);
+  assert.ok(deadEndOwStairs, 'Debe haber al menos una bajada a una zona sin salida en el overworld');
+  assert.equal(deadEndOwStairs.targetFloor, '1-cripta');
+
+  // 2. Mazmorra normal (Piso 2) genera múltiples bajadas
+  const f2 = generateDungeon({ level: 2, seed: 'dungeon-f2-multi' });
+  assert.ok(f2.stairsList.length >= 2, 'Piso 2 debe tener múltiples bajadas');
+  const deadEndF2 = f2.stairsList.find((s) => s.isDeadEndBranch);
+  assert.ok(deadEndF2, 'Piso 2 debe tener una escalera lateral hacia un piso sin salida (dead-end)');
+  assert.equal(deadEndF2.targetFloor, '2-cripta');
+
+  // 3. Piso sin bajada (Cripta muerta) NO tiene escaleras de bajada pero sí de subida
+  const crypt = generateDungeon({ level: '2-cripta', isDeadEnd: true, parentFloor: 2, seed: 'crypt-f2' });
+  assert.equal(crypt.isDeadEnd, true, 'El piso debe marcarse como isDeadEnd');
+  assert.equal(crypt.stairs, null, 'Un piso sin bajada no debe tener stairs');
+  assert.equal(crypt.stairsList.length, 0, 'Un piso sin bajada debe tener stairsList vacío');
+  assert.ok(crypt.stairsUp, 'Un piso sin bajada debe tener stairsUp para poder regresar');
+  assert.equal(crypt.parentFloor, 2, 'Debe recordar el piso padre');
+
+  // 4. Geometría diversa: amplios espacios abiertos (salas grandes >= 16x16 o arenas)
+  let foundGrandRoom = false;
+  for (let s = 1; s <= 5; s++) {
+    const d = generateDungeon({ level: 2, seed: `geom-test-${s}` });
+    if (d.rooms.some((r) => r.w >= 16 || r.h >= 16 || r.type === 'grand_plaza' || r.type === 'circular_sanctum')) {
+      foundGrandRoom = true;
+      break;
+    }
+  }
+  assert.ok(foundGrandRoom, 'Debe generar salas con geometrías abiertas y diversas (plazas grandes o santuarios)');
+});
+
+test('monstruo final en piso -3, transición al Mundo II y secuencia narrativa de historia tras la victoria', async () => {
+  const { generateDungeon, isFinalFloorLevel, generateNewWorld } = await import('../src/core/dungeon.js');
+  const { ArchGame } = await import('../src/game/engine.js');
+
+  // 1. Piso -3 contiene al Monstruo Final Hades
+  assert.ok(isFinalFloorLevel(-3), 'Piso -3 debe ser considerado piso final');
+  const fNeg3 = generateDungeon({ level: -3, seed: 'hades-neg3' });
+  assert.equal(fNeg3.isFinalFloor, true, 'Piso -3 debe tener isFinalFloor = true');
+  const hadesSpawn = fNeg3.enemySpawns.find((e) => e.kind === 'hades' && e.isFinalBoss);
+  assert.ok(hadesSpawn, 'Hades debe spawnear como monstruo final en el Piso -3');
+
+  // 2. Transición al Mundo II genera mundo astral
+  const mundo2 = generateNewWorld({ seed: 'mundo2-test' });
+  assert.equal(mundo2.level, 'mundo-2');
+  assert.ok(mundo2.biome.name.includes('Titanes') || mundo2.biome.name.includes('Astral'));
+
+  // 3. Simulación de derrota de Hades y emisión de historia secuencial
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevRaf = globalThis.requestAnimationFrame;
+
+  globalThis.window = {
+    addEventListener() {},
+    devicePixelRatio: 1,
+  };
+  globalThis.document = {
+    addEventListener() {},
+  };
+  globalThis.requestAnimationFrame = () => 1;
+
+  try {
+    let storyEmitted = false;
+    let worldTransitioned = false;
+    const game = new ArchGame({
+      canvas: {
+        width: 800,
+        height: 600,
+        getContext: () => ({
+          setTransform() {},
+          clearRect() {},
+          fillRect() {},
+          save() {},
+          restore() {},
+          translate() {},
+          scale() {},
+          beginPath() {},
+          moveTo() {},
+          lineTo() {},
+          closePath() {},
+          fill() {},
+          stroke() {},
+          fillText() {},
+          arc() {},
+          ellipse() {},
+          measureText: () => ({ width: 40 }),
+        }),
+        addEventListener() {},
+      },
+      onUiUpdate: () => {},
+      onHudTick: () => {},
+      onEvent: (ev) => {
+        if (ev.type === 'story_sequence') storyEmitted = true;
+        if (ev.type === 'new_world') worldTransitioned = true;
+      },
+    });
+    game.startNewGame({ classId: 'hoplita', heroName: 'Aquiles', seed: 'story-sim' });
+    game.floor = -3;
+    game.dungeon = fNeg3;
+
+    const hadesEnemy = {
+      id: 'hades_boss',
+      kind: 'hades',
+      tier: 'boss',
+      isFinalBoss: true,
+      hp: 0,
+      x: 10,
+      y: 10,
+      xp: 5000,
+      level: 3,
+    };
+    game._onEnemyKilled(hadesEnemy);
+    assert.equal(game.finalBossDefeated, true, 'Derrotar a Hades debe marcar finalBossDefeated');
+    assert.equal(storyEmitted, true, 'Debe emitir el evento story_sequence para desplegar la historia');
+
+    // 4. Trascendencia a Mundo II
+    game.transitionToNewWorld();
+    assert.equal(game.floor, 'mundo-2', 'El juego debe cambiar al piso mundo-2');
+    assert.equal(worldTransitioned, true, 'Debe emitir el evento new_world');
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.requestAnimationFrame = prevRaf;
+  }
+});
+
+test('personajes 3D y enemigos mejorados tienen escultura anatómica detallada, destello hitFlash y motor de audio acústico no-MIDI', async () => {
+  const { createHeroMesh3D, createEnemyMesh3D, updateActorRig3D } = await import('../src/game/models3d.js');
+  const { ArchAudioEngine, archAudio } = await import('../src/game/audio.js');
+
+  // 1. Verificar geometría enriquecida de héroes 3D (pteruges, pectorales, rodilleras, manos, brazaletes, cascos)
+  for (const classId of Object.keys(HERO_CLASSES)) {
+    const heroMesh = createHeroMesh3D(classId);
+    let meshCount = 0;
+    heroMesh.traverse((c) => {
+      if (c.isMesh) meshCount++;
+    });
+    assert.ok(meshCount >= 32, `Héroe 3D (${classId}) debe tener escultura anatómica detallada (>= 32 mallas, actual: ${meshCount})`);
+
+    // Probar destello incandescente al recibir golpe (hitFlashTimer)
+    heroMesh.userData.rig.hitFlashTimer = 0.12;
+    updateActorRig3D(heroMesh, { dt: 0.04, moving: false });
+    assert.ok(heroMesh.userData.rig.hitFlashTimer > 0);
+    updateActorRig3D(heroMesh, { dt: 0.15, moving: false });
+    assert.equal(heroMesh.userData.rig.hitFlashTimer, 0, 'hitFlashTimer debe expirar y restaurar materiales originales');
+  }
+
+  // 2. Verificar geometría enriquecida de enemigos 3D (costillar de esqueleto, plumas de arpía, piernas caprinas de sátiro, Labrys de minotauro, corona de Hades)
+  const minMeshesByEnemy = { skeleton: 24, harpy: 22, satyr: 22, minotaur: 24, hades: 28 };
+  for (const [kind, minCount] of Object.entries(minMeshesByEnemy)) {
+    const enemyMesh = createEnemyMesh3D({
+      id: `detail-${kind}`,
+      kind,
+      tier: kind === 'minotaur' || kind === 'hades' ? 'boss' : 'champion',
+      hp: 100,
+    });
+    let meshCount = 0;
+    enemyMesh.traverse((c) => {
+      if (c.isMesh) meshCount++;
+    });
+    assert.ok(meshCount >= minCount, `Enemigo 3D (${kind}) debe tener modelo detallado (>= ${minCount} mallas, actual: ${meshCount})`);
+  }
+
+  // 3. Verificar motor de audio acústico (Karplus-Strong physical modeling, Convolver reverb, SFX físicos)
+  assert.ok(archAudio instanceof ArchAudioEngine);
+  const engine = new ArchAudioEngine();
+  engine.setVolumes({ music: 0.65, sfx: 0.85 });
+  assert.equal(engine.musicVolume, 0.65);
+  assert.equal(engine.sfxVolume, 0.85);
+  const muted = engine.toggleMute(true);
+  assert.equal(muted, true);
+  assert.equal(engine.toggleMute(false), false);
+
+  // Asegurar que las llamadas a métodos de música y efectos funcionan sin errores en entorno headless
+  engine.setMusicTheme('overworld');
+  assert.equal(engine.currentTheme, 'overworld');
+  engine.setMusicTheme('underworld');
+  assert.equal(engine.currentTheme, 'underworld');
+  engine.setMusicTheme('boss');
+  assert.equal(engine.currentTheme, 'boss');
+  engine.playAttackSwing({ classId: 'hoplita', comboStep: 2 });
+  engine.playHitImpact({ isCrit: true, blocked: false });
+  engine.playHitImpact({ isCrit: false, blocked: true });
+  engine.playSkillCast('lightning');
+  engine.playPotBreak();
+  engine.playBushCut();
+  engine.playLootPickup('gold');
+  engine.playFanfare('victory');
+  engine.playEnemyDeath({ isBoss: true, kind: 'hades' });
+});
