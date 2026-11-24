@@ -27,6 +27,13 @@ import {
 import { compareItems, generateItem, getItemPowerScore, getItemSalvageValue, rollEnemyDrop } from '../core/loot.js';
 import { archAudio } from './audio.js';
 import { ArchRenderer3D } from './models3d.js';
+import {
+  COMPANION_MAX,
+  applyCompanionDifficultyToEnemy,
+  companionsUnlockedForLevel,
+  pickCompanionClass,
+  createCompanionState,
+} from '../core/companion.js';
 
 const TILE_W = 56;
 const TILE_H = 28;
@@ -95,6 +102,9 @@ export class ArchGame {
     this.cam = { x: 0, y: 0 };
     this.dungeon = null;
     this.floorCache = new Map();
+
+    this.companions = [];
+    this.companionModeEnabled = true;
 
     this.renderer3d = new ArchRenderer3D(this.canvas);
     this.renderer3d.setZoom(this.zoom);
@@ -265,8 +275,9 @@ export class ArchGame {
     return Math.hypot(this.joystick.x, this.joystick.y) > 0.08;
   }
 
-  startNewGame({ classId = 'hoplita', heroName = '', seed = 'olimpia-01' } = {}) {
+  startNewGame({ classId = 'hoplita', heroName = '', seed = 'olimpia-01', themeId = 'mitologia_griega' } = {}) {
     this.seed = (seed || 'olimpia-01').trim();
+    this.themeId = themeId || 'mitologia_griega';
     this.floor = 1;
     this.dungeon = null;
     this.floorCache = new Map();
@@ -291,6 +302,8 @@ export class ArchGame {
     this.lastAttackTs = 0;
     this.hitStopTimer = 0;
     this.dayTime = 0.22;
+    this.companions = [];
+    this.companionModeEnabled = true;
     this.joystick = { x: 0, y: 0 };
     this.lastAimDir = { x: 1, y: 0 };
     this.log = [];
@@ -329,6 +342,207 @@ export class ArchGame {
     return { x: anchor.x + 0.5, y: anchor.y + 0.5 };
   }
 
+    // ===== Sistema de Companeros Invocables =====
+  /** Cuantos companeros tiene el heroe desbloqueados segun su nivel actual. */
+  getCompanionTarget() {
+    if (!this.companionModeEnabled) return 0;
+    return companionsUnlockedForLevel(this.hero?.level || 1);
+  }
+
+  /** Invoca companeros faltantes segun el nivel (idempotente). Devuelve los nuevos. */
+  syncCompanions() {
+    const target = this.getCompanionTarget();
+    const created = [];
+    while (this.companions.length < target && this.companions.length < COMPANION_MAX) {
+      created.push(this.spawnCompanion());
+    }
+    if (created.length > 0) {
+      this._scaleEnemiesForCompanions();
+      this._notify();
+    }
+    return created;
+  }
+
+  /** Crea un nuevo companero cerca del heroe. */
+  spawnCompanion() {
+    const taken = this.companions.map((c) => c.classId);
+    const classId = pickCompanionClass(this.hero?.classId || 'hoplita', taken);
+    const lvl = this.hero?.level || 1;
+    // Buscar una casilla caminable adyacente al heroe
+    let sx = this.pos.x + 0.6;
+    let sy = this.pos.y + 0.6;
+    if (this.dungeon) {
+      const offsets = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]];
+      for (const [dx, dy] of offsets) {
+        const tx = Math.floor(this.pos.x + dx);
+        const ty = Math.floor(this.pos.y + dy);
+        if (tx >= 0 && ty >= 0 && ty < this.dungeon.height && tx < this.dungeon.width &&
+            this.dungeon.grid[ty]?.[tx] === 1 /* TILE_FLOOR */) {
+          sx = tx + 0.5;
+          sy = ty + 0.5;
+          break;
+        }
+      }
+    }
+    const comp = createCompanionState({ classId, level: lvl, x: sx, y: sy });
+    this.companions.push(comp);
+    this.addFloater(sx, sy, 'Invocado: ' + comp.hero.className, '#4ade80');
+    this.addLog('Nuevo aliado despertado: ' + comp.hero.className + ' se une a tu gesta.');
+    this.onEvent?.({ type: 'companion', title: 'Aliado despertado', message: comp.hero.className + ' te acompanara en combate.' });
+    return comp;
+  }
+
+  /** Escala enemigos segun cantidad de companeros activos (dificultad). */
+  _scaleEnemiesForCompanions() {
+    const n = this.companions.length;
+    for (const e of this.enemies) {
+      applyCompanionDifficultyToEnemy(e, n);
+    }
+  }
+
+  /** Activa/desactiva el modo de companeros. */
+  toggleCompanionMode(forceState = null) {
+    this.companionModeEnabled = typeof forceState === 'boolean' ? forceState : !this.companionModeEnabled;
+    if (this.companionModeEnabled) {
+      const made = this.syncCompanions();
+      this.addLog('Modo Companeros ACTIVADO.');
+    } else {
+      this.addLog('Modo Companeros DESACTIVADO (los aliados se retiran).');
+      this.companions = [];
+      this._scaleEnemiesForCompanions(); // resetear dificultad a x1
+      this._notify();
+    }
+    return this.companionModeEnabled;
+  }
+
+  /** Actualiza la IA de los companeros (seguir + atacar + habilidades). */
+  _updateCompanions(dt) {
+    if (this.companions.length === 0) return;
+    const heroDerived = computeHeroDerived(this.hero);
+    for (const c of this.companions) {
+      const d = computeHeroDerived(c.hero);
+      c.attackCdLeft = Math.max(0, c.attackCdLeft - dt);
+      c.skillQCd = Math.max(0, c.skillQCd - dt);
+      c.skillECd = Math.max(0, c.skillECd - dt);
+      c.hero.mana = Math.min(d.maxMana, c.hero.mana + dt * 2.2);
+      if (c.hero.hp <= 0) continue;
+
+      // Encontrar enemigo cercano (vivo y visible)
+      let target = null;
+      let best = c.aggressionRange;
+      for (const e of this.enemies) {
+        if (e.hp <= 0) continue;
+        const dist = Math.hypot(e.x - c.x, e.y - c.y);
+        const vis = this.dungeon?.explored[Math.floor(e.y)]?.[Math.floor(e.x)] === 2;
+        if (dist < best && vis) { best = dist; target = e; }
+      }
+
+      if (target && best <= d.range + 0.4) {
+        // Atacar
+        c.state = 'combat';
+        const ang = Math.atan2(target.y - c.y, target.x - c.x);
+        c.lastAimDir = { x: Math.cos(ang), y: Math.sin(ang) };
+        if (c.attackCdLeft <= 0) {
+          c.attackCdLeft = d.attackCd;
+          this._companionStrike(c, target, d, ang);
+        }
+        // Lanzar habilidades automticamente
+        const cls = HERO_CLASSES[c.classId];
+        if (c.skillQCd <= 0 && c.hero.mana >= cls.skills.q.cost && Math.random() < 0.5) {
+          c.hero.mana -= cls.skills.q.cost;
+          c.skillQCd = cls.skills.q.cd;
+          this._companionSkill(c, target, d, 'q');
+        } else if (c.skillECd <= 0 && c.hero.mana >= cls.skills.e.cost && Math.random() < 0.25) {
+          c.hero.mana -= cls.skills.e.cost;
+          c.skillECd = cls.skills.e.cd;
+          this._companionSkill(c, target, d, 'e');
+        }
+      } else {
+        c.state = 'follow';
+        // Seguir al heroe manteniendo distancia
+        const dx = this.pos.x - c.x;
+        const dy = this.pos.y - c.y;
+        const distHero = Math.hypot(dx, dy);
+        if (distHero > c.followDist) {
+          const nx = c.x + (dx / distHero) * d.speed * dt;
+          const ny = c.y + (dy / distHero) * d.speed * dt;
+          if (isWalkable(this.dungeon, nx, c.y)) c.x = nx;
+          if (isWalkable(this.dungeon, c.x, ny)) c.y = ny;
+          c.lastAimDir = { x: dx / distHero, y: dy / distHero };
+        }
+        if (target && best > d.range + 0.4) {
+          // Acercarse al enemigo
+          const ex = c.x + ((target.x - c.x) / best) * d.speed * dt;
+          const ey = c.y + ((target.y - c.y) / best) * d.speed * dt;
+          if (isWalkable(this.dungeon, ex, c.y)) c.x = ex;
+          if (isWalkable(this.dungeon, c.x, ey)) c.y = ey;
+        }
+      }
+    }
+  }
+
+  /** El companero golpea a un enemigo. */
+  _companionStrike(c, target, d, ang) {
+    if (d.range > 2.2) {
+      // Arqueros/magos: proyectil
+      this.projectiles.push({
+        fromCompanion: true,
+        companionId: c.id,
+        x: c.x, y: c.y,
+        vx: Math.cos(ang) * 22,
+        vy: Math.sin(ang) * 22,
+        life: 0.85,
+        minDmg: d.minDamage,
+        maxDmg: d.maxDamage,
+        critChance: d.critChance,
+        color: HERO_CLASSES[c.classId].color,
+      });
+    } else {
+      const res = this._companionStrikeEnemy(c, target, d);
+    }
+    this.renderer3d?.triggerHeroAttack({
+      whirlwind: false, comboStep: 0, aimDir: ang,
+      classId: c.classId, pos: { x: c.x, y: c.y },
+    });
+  }
+
+  /** Aplica daño de companero a un enemigo (igual que _strikeEnemy pero sin vida al heroe). */
+  _companionStrikeEnemy(c, enemy, d) {
+    const res = resolveStrike({
+      minDamage: d.minDamage, maxDamage: d.maxDamage,
+      attackerDex: d.stats.dexterity,
+      attackerLevel: c.hero.level,
+      targetArmor: enemy.armor,
+      critChance: d.critChance,
+    });
+    if (!res.hit) { this.addFloater(enemy.x, enemy.y, 'Fallo', '#94a3b8'); return res; }
+    enemy.hp = Math.max(0, enemy.hp - res.damage);
+    this.addFloater(enemy.x, enemy.y, res.crit ? res.damage + '!' : String(res.damage), res.crit ? '#facc15' : '#c4b5fd');
+    this.renderer3d?.triggerHitImpactVFX({ x: enemy.x, y: enemy.y, isCrit: res.crit, damage: res.damage });
+    if (enemy.hp <= 0) this._onEnemyKilled(enemy);
+    return res;
+  }
+
+  /** Lanza una habilidad de companero (version simplificada). */
+  _companionSkill(c, target, d, slot) {
+    const cls = HERO_CLASSES[c.classId];
+    const ann = cls.skills[slot];
+    const ang = Math.atan2(target.y - c.y, target.x - c.x);
+    const pMult = d.skillPowerMult || 1;
+    const dmg = Math.round(d.maxDamage * 1.4 * pMult);
+    this.renderer3d?.triggerSkillVFX({
+      type: slot === 'q' ? (c.classId === 'oraculo' ? 'lightning' : 'shield_slam') : 'solar_nova',
+      x: c.x, y: c.y, targetX: target.x, targetY: target.y,
+      damage: dmg,
+    });
+    // Daño en area simple: golpea al objetivo y vecinos
+    const hits = this.enemies.filter((e) => e.hp > 0 && Math.hypot(e.x - target.x, e.y - target.y) <= 2.0);
+    for (const e of hits) {
+      this._companionStrikeEnemy(c, e, { ...d, minDamage: d.minDamage * 1.3, maxDamage: d.maxDamage * 1.5 });
+    }
+    this.addFloater(c.x, c.y, ann.name, HERO_CLASSES[c.classId].color);
+  }
+
   _loadFloor(floor, { entry = 'spawn', savePrevious = true, parentFloor = null, isDeadEnd = false } = {}) {
     if (savePrevious && this.dungeon && this.floor != null) {
       this.floorCache?.set(this.floor, {
@@ -353,6 +567,7 @@ export class ArchGame {
         seed: this.seed,
         parentFloor,
         isDeadEnd,
+        themeId: this.themeId || 'mitologia_griega',
       });
       if (parentFloor != null) {
         this.dungeon.parentFloor = parentFloor;
@@ -1812,6 +2027,7 @@ export class ArchGame {
       if (this.autoManageEnabled) {
         this.autoAllocatePointsRandom();
       }
+      this.syncCompanions?.();
     }
     this._advanceQuest('antro_perjuros', 1, enemy.x, enemy.y);
     if (enemy.tier === 'boss') {
@@ -2077,7 +2293,7 @@ export class ArchGame {
         this.projectiles.splice(i, 1);
         continue;
       }
-      if (p.fromHero) {
+      if (p.fromHero || p.fromCompanion) {
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
           if (Math.hypot(e.x - p.x, e.y - p.y) < 0.65) {
@@ -2211,6 +2427,9 @@ export class ArchGame {
       this.cam.x += (Math.random() - 0.5) * shakeMag;
       this.cam.y += (Math.random() - 0.5) * shakeMag;
     }
+
+    // IA de companeros aliados
+    this._updateCompanions(dt);
 
     this._hudTickAcc += dt;
     if (this._hudTickAcc >= 0.066) {
@@ -2451,6 +2670,9 @@ export class ArchGame {
     // Entidades ordenadas por profundidad (gx + gy)
     const actors = [
       { kind: 'hero', x: this.pos.x, y: this.pos.y, depth: this.pos.x + this.pos.y },
+      ...this.companions
+        .filter((c) => c.hero.hp > 0 && explored[Math.floor(c.y)]?.[Math.floor(c.x)] === 2)
+        .map((c) => ({ kind: 'companion', c, depth: c.x + c.y })),
       ...this.enemies
         .filter((e) => e.hp > 0 && explored[Math.floor(e.y)]?.[Math.floor(e.x)] === 2)
         .map((e) => ({ kind: 'enemy', e, depth: e.x + e.y })),
@@ -2473,6 +2695,28 @@ export class ArchGame {
           ctx.lineWidth = 2;
           ctx.stroke();
         }
+      } else if (a.kind === 'companion') {
+        const c = a.c;
+        const clsColor = HERO_CLASSES[c.classId].color;
+        const iso = toIso(c.x, c.y);
+        if (!is3D) {
+          ctx.fillStyle = 'rgba(0,0,0,0.4)';
+          ctx.beginPath();
+          ctx.ellipse(iso.x, iso.y + 4, 8, 4, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = clsColor;
+          ctx.beginPath();
+          ctx.arc(iso.x, iso.y - 8, 7.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#86efac';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+        // Etiqueta de alias (nombre de clase)
+        ctx.fillStyle = clsColor;
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(c.hero.className.split(' ')[0], iso.x, iso.y - (is3D ? 30 : 20));
       } else {
         const e = a.e;
         const iso = toIso(e.x, e.y);
@@ -2605,6 +2849,9 @@ export class ArchGame {
       gameOver: this.gameOver,
       finalBossDefeated: this.finalBossDefeated,
       autoManageEnabled: Boolean(this.autoManageEnabled),
+      companions: this.companions.map((c) => ({ id: c.id, classId: c.classId, name: c.hero.className, hp: c.hero.hp, maxHp: computeHeroDerived(c.hero).maxHp })),
+      companionModeEnabled: Boolean(this.companionModeEnabled),
+      companionTarget: this.getCompanionTarget(),
     });
   }
 
@@ -2631,6 +2878,9 @@ export class ArchGame {
       autoManageEnabled: Boolean(this.autoManageEnabled),
       skills: classDef.skills,
       nearby: this.getNearbyInteractable(),
+      companions: this.companions.map((c) => ({ id: c.id, classId: c.classId, name: c.hero.className, hp: c.hero.hp, maxHp: computeHeroDerived(c.hero).maxHp })),
+      companionModeEnabled: Boolean(this.companionModeEnabled),
+      companionTarget: this.getCompanionTarget(),
     });
   }
 }

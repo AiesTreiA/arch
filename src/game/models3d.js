@@ -12,13 +12,114 @@
 import * as THREE from 'three';
 import { HERO_CLASSES } from '../core/combat.js';
 import { TILE_SHRINE, TILE_STAIRS, TILE_STAIRS_UP, TILE_WALL } from '../core/dungeon.js';
+import { getMetaverseTheme, resolveBiomeLighting } from '../core/themes.js';
 import { getItemVisualType } from '../core/loot.js';
 
 // Escala ortográfica exacta para coincidir al píxel con toIso(gx, gy) donde TILE_W=56, TILE_H=28
 export const ISO_SCALE = 28 * Math.SQRT2; // 39.5979797...
 const CAM_ELEV_Y = Math.sqrt(2 / 3); // tan(30°) * sqrt(2) => proyección isométrica 2:1 exacta
 
-/** Utilidad para crear materiales estándar con acabado bronce/mármol/tela estilizado de alta fidelidad */
+const _procTexCache = new Map();
+
+/**
+ * Genera y cachea texturas procedurales tileables (bump/roughness) en canvas 256x256
+ * para dar micro-detalle realista a metales martillados, cuero, tela y mármol.
+ * En Node.js (tests sin DOM) devuelve null de forma segura.
+ */
+function getProceduralTexture(kind = 'metal') {
+  if (typeof document === 'undefined') return null;
+  if (_procTexCache.has(kind)) return _procTexCache.get(kind);
+  try {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, size, size);
+
+    // PRNG determinista ligero para textura consistente
+    let seed = kind.split('').reduce((a, c) => a + c.charCodeAt(0) * 31, 1337);
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+
+    if (kind === 'metal') {
+      for (let i = 0; i < 900; i++) {
+        const y = rand() * size;
+        const x = rand() * size;
+        const len = 10 + rand() * 44;
+        const v = Math.floor(105 + rand() * 50);
+        ctx.strokeStyle = `rgba(${v},${v},${v},0.22)`;
+        ctx.lineWidth = 0.8 + rand() * 1.2;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + len, y + (rand() - 0.5) * 4);
+        ctx.stroke();
+      }
+      for (let i = 0; i < 240; i++) {
+        const x = rand() * size;
+        const y = rand() * size;
+        const r = 2 + rand() * 6;
+        const v = Math.floor(110 + rand() * 40);
+        ctx.fillStyle = `rgba(${v},${v},${v},0.16)`;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (kind === 'cloth') {
+      for (let y = 0; y < size; y += 4) {
+        ctx.fillStyle = y % 8 === 0 ? 'rgba(155,155,155,0.28)' : 'rgba(95,95,95,0.28)';
+        ctx.fillRect(0, y, size, 2);
+      }
+      for (let x = 0; x < size; x += 4) {
+        ctx.fillStyle = x % 8 === 0 ? 'rgba(155,155,155,0.22)' : 'rgba(95,95,95,0.22)';
+        ctx.fillRect(x, 0, 2, size);
+      }
+    } else if (kind === 'leather') {
+      for (let i = 0; i < 1600; i++) {
+        const x = rand() * size;
+        const y = rand() * size;
+        const r = 1.2 + rand() * 3.5;
+        const v = Math.floor(85 + rand() * 85);
+        ctx.fillStyle = `rgba(${v},${v},${v},0.28)`;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (kind === 'stone') {
+      for (let i = 0; i < 45; i++) {
+        let x = rand() * size;
+        let y = rand() * size;
+        const v = rand() > 0.5 ? 175 : 75;
+        ctx.strokeStyle = `rgba(${v},${v},${v},0.2)`;
+        ctx.lineWidth = 1 + rand() * 2.5;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        for (let s = 0; s < 6; s++) {
+          x += (rand() - 0.5) * 60;
+          y += (rand() - 0.5) * 60;
+          ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+    }
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(2, 2);
+    _procTexCache.set(kind, tex);
+    return tex;
+  } catch {
+    return null;
+  }
+}
+
+/** Utilidad para crear materiales PBR estándar/físicos con micro-texturas procedurales */
 function mat(
   color,
   {
@@ -29,9 +130,17 @@ function mat(
     transparent = false,
     opacity = 1,
     flatShading = false,
+    bumpKind = null,
+    bumpScale = 0.015,
+    clearcoat = 0,
+    clearcoatRoughness = 0.25,
+    sheen = 0,
+    sheenColor = 0xffffff,
+    side = THREE.FrontSide,
   } = {}
 ) {
-  return new THREE.MeshStandardMaterial({
+  const bumpMap = bumpKind ? getProceduralTexture(bumpKind) : null;
+  const baseOpts = {
     color,
     metalness,
     roughness,
@@ -40,7 +149,19 @@ function mat(
     transparent,
     opacity,
     flatShading,
-  });
+    side,
+    ...(bumpMap ? { bumpMap, bumpScale } : {}),
+  };
+  if (clearcoat > 0 || sheen > 0) {
+    return new THREE.MeshPhysicalMaterial({
+      ...baseOpts,
+      clearcoat,
+      clearcoatRoughness,
+      sheen,
+      sheenColor: new THREE.Color(sheenColor),
+    });
+  }
+  return new THREE.MeshStandardMaterial(baseOpts);
 }
 
 function enableShadows(obj, cast = true, receive = true) {
@@ -893,25 +1014,81 @@ export function createHeroMesh3D(classId = 'hoplita') {
   const root = new THREE.Group();
   root.name = `hero-${classId}`;
 
-  const skinMat = mat(classId === 'necromante' ? 0xcbd5e1 : 0xeab68c, { roughness: 0.62, metalness: 0.06 });
-  const primaryMat = mat(cls.color, { roughness: 0.38, metalness: 0.42 });
-  const bronzeMat = mat(0xd99b43, { roughness: 0.24, metalness: 0.85 });
-  const goldMat = mat(0xfacc15, { roughness: 0.18, metalness: 0.92, emissive: 0x422006, emissiveIntensity: 0.28 });
-  const darkMetalMat = mat(0x334155, { roughness: 0.28, metalness: 0.82 });
-  const steelMat = mat(0xe2e8f0, { roughness: 0.18, metalness: 0.9 });
-  const leatherMat = mat(0x5c3a21, { roughness: 0.74, metalness: 0.12 });
-  const darkClothMat = mat(0x1e1b2e, { roughness: 0.72, metalness: 0.12 });
-  const boneMat = mat(0xf1f5f9, { roughness: 0.42, metalness: 0.1 });
+  const skinMat = mat(classId === 'necromante' ? 0xc8d2de : 0xe4ab81, {
+    roughness: 0.56,
+    metalness: 0.04,
+    clearcoat: 0.08,
+    clearcoatRoughness: 0.6,
+  });
+  const primaryMat = mat(cls.color, {
+    roughness: 0.44,
+    metalness: 0.32,
+    bumpKind: 'cloth',
+    bumpScale: 0.012,
+    sheen: 0.35,
+    sheenColor: cls.color,
+  });
+  const bronzeMat = mat(0xd8963e, {
+    roughness: 0.24,
+    metalness: 0.88,
+    bumpKind: 'metal',
+    bumpScale: 0.014,
+    clearcoat: 0.28,
+    clearcoatRoughness: 0.22,
+  });
+  const goldMat = mat(0xfacc15, {
+    roughness: 0.16,
+    metalness: 0.94,
+    emissive: 0x422006,
+    emissiveIntensity: 0.24,
+    bumpKind: 'metal',
+    bumpScale: 0.008,
+    clearcoat: 0.4,
+    clearcoatRoughness: 0.15,
+  });
+  const darkMetalMat = mat(0x2d3748, {
+    roughness: 0.28,
+    metalness: 0.86,
+    bumpKind: 'metal',
+    bumpScale: 0.012,
+  });
+  const steelMat = mat(0xe2e8f0, {
+    roughness: 0.16,
+    metalness: 0.92,
+    bumpKind: 'metal',
+    bumpScale: 0.008,
+    clearcoat: 0.35,
+  });
+  const leatherMat = mat(0x5a361e, {
+    roughness: 0.72,
+    metalness: 0.08,
+    bumpKind: 'leather',
+    bumpScale: 0.018,
+  });
+  const darkClothMat = mat(0x181626, {
+    roughness: 0.78,
+    metalness: 0.05,
+    bumpKind: 'cloth',
+    bumpScale: 0.015,
+    sheen: 0.4,
+    sheenColor: 0x475569,
+  });
+  const boneMat = mat(0xebe7df, {
+    roughness: 0.45,
+    metalness: 0.06,
+    bumpKind: 'stone',
+    bumpScale: 0.012,
+  });
 
   // Anillo base de clase en el suelo con runas concéntricas + anillos de buffs (Aura/Furia)
   const baseRing = new THREE.Mesh(
-    new THREE.RingGeometry(0.28, 0.37, 32),
+    new THREE.RingGeometry(0.28, 0.37, 40),
     new THREE.MeshBasicMaterial({ color: cls.color, side: THREE.DoubleSide, transparent: true, opacity: 0.62 })
   );
   baseRing.rotation.x = -Math.PI / 2;
   baseRing.position.y = 0.02;
   const innerRuneRing = new THREE.Mesh(
-    new THREE.RingGeometry(0.18, 0.21, 24),
+    new THREE.RingGeometry(0.18, 0.21, 32),
     new THREE.MeshBasicMaterial({ color: 0xfef08a, side: THREE.DoubleSide, transparent: true, opacity: 0.28 })
   );
   innerRuneRing.rotation.x = -Math.PI / 2;
@@ -919,7 +1096,7 @@ export function createHeroMesh3D(classId = 'hoplita') {
   root.add(baseRing, innerRuneRing);
 
   const shieldAura = new THREE.Mesh(
-    new THREE.TorusGeometry(0.45, 0.026, 12, 36),
+    new THREE.TorusGeometry(0.45, 0.026, 14, 42),
     mat(0xfacc15, { emissive: 0xf59e0b, emissiveIntensity: 1.0, transparent: true, opacity: 0.88 })
   );
   shieldAura.rotation.x = Math.PI / 2;
@@ -928,7 +1105,7 @@ export function createHeroMesh3D(classId = 'hoplita') {
   root.add(shieldAura);
 
   const furyAura = new THREE.Mesh(
-    new THREE.TorusGeometry(0.41, 0.022, 12, 32),
+    new THREE.TorusGeometry(0.41, 0.022, 14, 38),
     mat(0xef4444, { emissive: 0xdc2626, emissiveIntensity: 1.15, transparent: true, opacity: 0.88 })
   );
   furyAura.rotation.x = Math.PI / 2;
@@ -940,88 +1117,146 @@ export function createHeroMesh3D(classId = 'hoplita') {
   const bodyGroup = new THREE.Group();
   root.add(bodyGroup);
 
-  // Piernas articuladas con muslo anatómico, rodillera (epigonation), greba (cnémida) y sandalia/bota
+  // Piernas articuladas con muslo anatómico, rodillera esculpida, greba con cresta tibial y sandalia/bota orgánica
   const leftLegPivot = new THREE.Group();
-  leftLegPivot.position.set(-0.095, 0.34, 0);
+  leftLegPivot.position.set(-0.095, 0.35, 0);
   const rightLegPivot = new THREE.Group();
-  rightLegPivot.position.set(0.095, 0.34, 0);
+  rightLegPivot.position.set(0.095, 0.35, 0);
   bodyGroup.add(leftLegPivot, rightLegPivot);
 
   const legMat = classId === 'hoplita' || classId === 'campeon' ? bronzeMat : classId === 'necromante' ? darkMetalMat : leatherMat;
   for (const pivot of [leftLegPivot, rightLegPivot]) {
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.05, 0.18, 12), skinMat);
-    thigh.position.y = -0.08;
-    const kneeCap = new THREE.Mesh(new THREE.SphereGeometry(0.054, 10, 8), goldMat);
-    kneeCap.scale.set(0.95, 0.85, 0.7);
-    kneeCap.position.set(0, -0.155, 0.032);
-    const greave = new THREE.Mesh(new THREE.CylinderGeometry(0.054, 0.042, 0.18, 12), legMat);
-    greave.position.y = -0.23;
-    const greaveTrim = new THREE.Mesh(new THREE.TorusGeometry(0.052, 0.008, 6, 12), goldMat);
+    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.064, 0.048, 0.185, 16), skinMat);
+    thigh.position.y = -0.082;
+    const thighStrap = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.007, 8, 16), leatherMat);
+    thighStrap.rotation.x = Math.PI / 2;
+    thighStrap.position.y = -0.1;
+
+    // Rodillera (poleyn) con reborde dorado
+    const kneeCap = new THREE.Mesh(new THREE.SphereGeometry(0.052, 14, 12), goldMat);
+    kneeCap.scale.set(0.95, 0.92, 0.68);
+    kneeCap.position.set(0, -0.16, 0.032);
+    const kneeWing = new THREE.Mesh(new THREE.TorusGeometry(0.048, 0.008, 8, 16, Math.PI), bronzeMat);
+    kneeWing.position.set(0, -0.155, 0.025);
+
+    // Greba anatómica (cnémida) con pantorrilla marcada
+    const greave = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.038, 0.185, 16), legMat);
+    greave.position.y = -0.235;
+    const shinRidge = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.15, 0.022), goldMat);
+    shinRidge.position.set(0, -0.235, 0.044);
+    const greaveTrim = new THREE.Mesh(new THREE.TorusGeometry(0.053, 0.008, 8, 16), goldMat);
     greaveTrim.rotation.x = Math.PI / 2;
-    greaveTrim.position.y = -0.17;
-    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.092, 0.062, 0.15), legMat);
-    boot.position.set(0, -0.31, 0.024);
-    const sole = new THREE.Mesh(new THREE.BoxGeometry(0.096, 0.02, 0.156), darkMetalMat);
-    sole.position.set(0, -0.335, 0.024);
-    pivot.add(thigh, kneeCap, greave, greaveTrim, boot, sole);
+    greaveTrim.position.y = -0.175;
+
+    // Bota/Sandalia anatómica esculpida (empeine, puntera redondeada, talón y suela)
+    const ankle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.044, 0.05, 14), leatherMat);
+    ankle.position.set(0, -0.305, 0.004);
+    const footBridge = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.046, 0.11, 14), legMat);
+    footBridge.rotation.x = Math.PI / 2 - 0.15;
+    footBridge.scale.set(1.05, 1.0, 0.68);
+    footBridge.position.set(0, -0.322, 0.035);
+    const toeCap = new THREE.Mesh(new THREE.SphereGeometry(0.043, 14, 10), goldMat);
+    toeCap.scale.set(1.05, 0.62, 1.15);
+    toeCap.position.set(0, -0.326, 0.08);
+    const sole = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.052, 0.022, 14), darkMetalMat);
+    sole.scale.set(0.95, 1, 1.55);
+    sole.position.set(0, -0.342, 0.035);
+
+    pivot.add(thigh, thighStrap, kneeCap, kneeWing, greave, shinRidge, greaveTrim, ankle, footBridge, toeCap, sole);
   }
 
-  // Torso anatómico esculpido y faldellín griego (Pteruges detallados / Túnica)
+  // Torso anatómico esculpido en V (LatheGeometry) y faldellín griego (Pteruges)
   const torsoPivot = new THREE.Group();
   torsoPivot.position.set(0, 0.36, 0);
   bodyGroup.add(torsoPivot);
 
   const isBroad = classId === 'campeon' || classId === 'hoplita' || classId === 'coribante';
-  const chestW = isBroad ? 0.31 : 0.25;
-  const chestD = isBroad ? 0.195 : 0.165;
+  const chestW = isBroad ? 0.32 : 0.26;
+  const chestD = isBroad ? 0.205 : 0.175;
 
   const torsoBaseMat = classId === 'hoplita' ? bronzeMat : classId === 'campeon' ? skinMat : primaryMat;
-  const torsoMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(chestW, 0.34, chestD),
-    torsoBaseMat
-  );
-  torsoMesh.position.y = 0.18;
+
+  // Perfil anatómico esculpido: cintura estrecha -> abdomen -> caja torácica amplia -> hombros
+  const torsoProfile = [
+    new THREE.Vector2(0.01, 0.0),
+    new THREE.Vector2(chestW * 0.42, 0.02),
+    new THREE.Vector2(chestW * 0.40, 0.10),
+    new THREE.Vector2(chestW * 0.47, 0.20),
+    new THREE.Vector2(chestW * 0.54, 0.29),
+    new THREE.Vector2(chestW * 0.46, 0.35),
+    new THREE.Vector2(0.01, 0.36),
+  ];
+  const torsoMesh = new THREE.Mesh(new THREE.LatheGeometry(torsoProfile, 22), torsoBaseMat);
+  torsoMesh.scale.set(1.0, 1.0, chestD / chestW + 0.06);
   torsoPivot.add(torsoMesh);
 
-  // Relieve pectoral y abdominal (coraza muscular griega o musculatura tracia)
+  // Relieve pectoral, abdominal (6-pack) y clavículas
   for (const sx of [-1, 1]) {
-    const pec = new THREE.Mesh(new THREE.SphereGeometry(chestW * 0.23, 12, 10), torsoBaseMat);
-    pec.scale.set(1.05, 0.78, 0.45);
-    pec.position.set(sx * (chestW * 0.22), 0.245, chestD * 0.46);
+    const pec = new THREE.Mesh(new THREE.SphereGeometry(chestW * 0.24, 16, 12), torsoBaseMat);
+    pec.scale.set(1.08, 0.76, 0.44);
+    pec.position.set(sx * (chestW * 0.21), 0.25, chestD * 0.44);
     torsoPivot.add(pec);
 
-    // Hombrera orgánica base (deltoides / gorguera)
-    const deltoid = new THREE.Mesh(
-      new THREE.SphereGeometry(0.072, 12, 10),
+    // Abdominales esculpidos (3 pares)
+    for (let row = 0; row < 3; row++) {
+      const ab = new THREE.Mesh(new THREE.SphereGeometry(chestW * 0.095, 10, 8), torsoBaseMat);
+      ab.scale.set(1.15, 0.72, 0.45);
+      ab.position.set(sx * (chestW * 0.1), 0.165 - row * 0.044, chestD * 0.41);
+      torsoPivot.add(ab);
+    }
+
+    // Clavícula y hombrera orgánica base (pauldron multicapa)
+    const clavicle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.022, 0.026, chestW * 0.45, 10),
+      classId === 'hoplita' ? goldMat : bronzeMat
+    );
+    clavicle.rotation.z = sx * (Math.PI / 2 - 0.22);
+    clavicle.position.set(sx * (chestW * 0.24), 0.33, chestD * 0.28);
+    torsoPivot.add(clavicle);
+
+    const pauldronBase = new THREE.Mesh(
+      new THREE.SphereGeometry(0.078, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.65),
       classId === 'hoplita' ? goldMat : classId === 'sombra' ? darkMetalMat : bronzeMat
     );
-    deltoid.scale.set(1.1, 0.75, 1.0);
-    deltoid.position.set(sx * (chestW * 0.52), 0.33, 0);
-    torsoPivot.add(deltoid);
+    pauldronBase.scale.set(1.12, 0.82, 1.05);
+    pauldronBase.position.set(sx * (chestW * 0.52), 0.325, 0);
+    pauldronBase.rotation.z = -sx * 0.35;
+    const pauldronRim = new THREE.Mesh(new THREE.TorusGeometry(0.072, 0.009, 8, 18), goldMat);
+    pauldronRim.rotation.x = Math.PI / 2;
+    pauldronRim.rotation.y = sx * 0.35;
+    pauldronRim.position.set(sx * (chestW * 0.52), 0.315, 0);
+    torsoPivot.add(pauldronBase, pauldronRim);
   }
 
   // Medallón / Gorgoneion o emblema olímpico en el centro del pecho
-  const chestEmblem = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.044, 1),
+  const emblemMat =
     classId === 'necromante'
-      ? mat(0xc084fc, { emissive: 0x7e22ce, emissiveIntensity: 0.9 })
+      ? mat(0xc084fc, { emissive: 0x7e22ce, emissiveIntensity: 0.95, clearcoat: 0.6 })
       : classId === 'oraculo'
-      ? mat(0x38bdf8, { emissive: 0x0284c7, emissiveIntensity: 0.9 })
-      : goldMat
-  );
+      ? mat(0x38bdf8, { emissive: 0x0284c7, emissiveIntensity: 0.95, clearcoat: 0.6 })
+      : goldMat;
+  const chestEmblem = new THREE.Mesh(new THREE.OctahedronGeometry(0.044, 1), emblemMat);
   chestEmblem.scale.set(1, 1, 0.45);
-  chestEmblem.position.set(0, 0.23, chestD * 0.52);
-  torsoPivot.add(chestEmblem);
+  chestEmblem.position.set(0, 0.24, chestD * 0.52);
+  const emblemRing = new THREE.Mesh(new THREE.TorusGeometry(0.048, 0.008, 8, 18), bronzeMat);
+  emblemRing.position.set(0, 0.24, chestD * 0.51);
+  torsoPivot.add(chestEmblem, emblemRing);
 
-  // Cinturón real con hebilla olímpica y faldellín de tiras (Pteruges)
-  const belt = new THREE.Mesh(new THREE.CylinderGeometry(chestW * 0.57, chestW * 0.63, 0.085, 16), goldMat);
-  belt.position.y = 0.03;
-  const buckle = new THREE.Mesh(new THREE.OctahedronGeometry(0.042, 0), goldMat);
-  buckle.position.set(0, 0.03, chestD * 0.54);
-  torsoPivot.add(belt, buckle);
+  // Cinturón anatómico con hebilla olímpica y faldellín de tiras (Pteruges)
+  const belt = new THREE.Mesh(new THREE.CylinderGeometry(chestW * 0.46, chestW * 0.52, 0.075, 20), leatherMat);
+  belt.scale.set(1, 1, chestD / chestW + 0.06);
+  belt.position.y = 0.032;
+  const beltTrim = new THREE.Mesh(new THREE.TorusGeometry(chestW * 0.47, 0.009, 8, 24), goldMat);
+  beltTrim.rotation.x = Math.PI / 2;
+  beltTrim.scale.set(1, chestD / chestW + 0.06, 1);
+  beltTrim.position.y = 0.055;
+  const buckle = new THREE.Mesh(new THREE.OctahedronGeometry(0.042, 1), goldMat);
+  buckle.scale.set(1.1, 0.95, 0.45);
+  buckle.position.set(0, 0.032, chestD * 0.52);
+  torsoPivot.add(belt, beltTrim, buckle);
 
   const skirt = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.145, 0.205, 0.165, 14),
+    new THREE.CylinderGeometry(0.145, 0.205, 0.165, 20),
     classId === 'hoplita' || classId === 'campeon'
       ? leatherMat
       : classId === 'necromante'
@@ -1032,45 +1267,79 @@ export function createHeroMesh3D(classId = 'hoplita') {
   torsoPivot.add(skirt);
 
   // Tiras de pteruges de cuero y tachuelas de oro alrededor de la cintura
-  const stripCount = 8;
+  const stripCount = 10;
   for (let i = 0; i < stripCount; i++) {
     const ang = (i / stripCount) * Math.PI * 2;
-    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.13, 0.014), i % 2 === 0 ? leatherMat : goldMat);
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.135, 0.014), i % 2 === 0 ? leatherMat : bronzeMat);
     strip.position.set(Math.sin(ang) * 0.168, -0.055, Math.cos(ang) * 0.168);
     strip.rotation.y = ang;
-    torsoPivot.add(strip);
+    strip.rotation.x = 0.08;
+    const stud = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 8), goldMat);
+    stud.position.set(Math.sin(ang) * 0.178, -0.095, Math.cos(ang) * 0.178);
+    torsoPivot.add(strip, stud);
   }
 
-  // Capa dorsal articulada con pliegues y broches dorados (Fíbulas)
+  // Capa dorsal articulada con pliegues orgánicos (PlaneGeometry con ondas) y fíbulas doradas
   const capePivot = new THREE.Group();
-  capePivot.position.set(0, 0.33, -chestD * 0.5);
+  capePivot.position.set(0, 0.34, -chestD * 0.48);
   torsoPivot.add(capePivot);
-  const capeColorMat = classId === 'hoplita' || classId === 'campeon' ? primaryMat : classId === 'necromante' ? primaryMat : darkClothMat;
-  const capeMesh = new THREE.Mesh(new THREE.BoxGeometry(chestW * 0.96, 0.46, 0.032), capeColorMat);
-  capeMesh.position.set(0, -0.21, -0.02);
-  const capeTrim = new THREE.Mesh(new THREE.BoxGeometry(chestW * 0.98, 0.04, 0.036), goldMat);
-  capeTrim.position.set(0, -0.43, -0.02);
+  const capeColorMat = mat(
+    classId === 'hoplita' || classId === 'campeon' || classId === 'necromante' ? cls.color : 0x181626,
+    {
+      roughness: 0.72,
+      metalness: 0.08,
+      bumpKind: 'cloth',
+      bumpScale: 0.016,
+      sheen: 0.55,
+      sheenColor: cls.color,
+      side: THREE.DoubleSide,
+    }
+  );
+  const capeGeo = new THREE.PlaneGeometry(chestW * 1.05, 0.5, 12, 8);
+  const capePos = capeGeo.attributes.position;
+  for (let i = 0; i < capePos.count; i++) {
+    const vx = capePos.getX(i);
+    const vy = capePos.getY(i);
+    const normY = (0.25 - vy) / 0.5; // 0 arriba, 1 abajo
+    const flare = 1 + normY * 0.22;
+    capePos.setX(i, vx * flare);
+    const wave = Math.sin(vx * 24) * 0.018 * (0.3 + normY * 0.7) - normY * normY * 0.04;
+    capePos.setZ(i, wave);
+  }
+  capeGeo.computeVertexNormals();
+  const capeMesh = new THREE.Mesh(capeGeo, capeColorMat);
+  capeMesh.position.set(0, -0.24, -0.02);
+  const capeTrim = new THREE.Mesh(new THREE.BoxGeometry(chestW * 1.24, 0.028, 0.018), goldMat);
+  capeTrim.position.set(0, -0.485, -0.055);
   capePivot.add(capeMesh, capeTrim);
   for (const sx of [-1, 1]) {
-    const fibula = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.009, 6, 12), goldMat);
-    fibula.position.set(sx * (chestW * 0.36), 0.33, chestD * 0.48);
+    const fibula = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.009, 8, 16), goldMat);
+    fibula.position.set(sx * (chestW * 0.36), 0.33, chestD * 0.46);
     torsoPivot.add(fibula);
   }
   capePivot.rotation.x = 0.18;
 
-  // Cabeza esculpida con cuello, mandíbula y Casco/Tocado icónico de cada clase
+  // Cabeza esculpida con cuello, mandíbula, nariz, arco superciliar y ojos realistas
   const headGroup = new THREE.Group();
   headGroup.position.set(0, 0.42, 0);
   torsoPivot.add(headGroup);
 
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.07, 10), skinMat);
-  neck.position.y = 0.01;
-  const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.122, 16, 14), skinMat);
-  headMesh.scale.set(0.95, 1.08, 0.98);
-  headMesh.position.y = 0.085;
-  headGroup.add(neck, headMesh);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.054, 0.068, 0.08, 14), skinMat);
+  neck.position.y = 0.015;
+  const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 22, 18), skinMat);
+  headMesh.scale.set(0.92, 1.08, 0.96);
+  headMesh.position.y = 0.09;
+  const jaw = new THREE.Mesh(new THREE.CylinderGeometry(0.078, 0.052, 0.075, 14), skinMat);
+  jaw.scale.set(0.95, 1, 1.05);
+  jaw.position.set(0, 0.032, 0.025);
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.05, 6), skinMat);
+  nose.rotation.x = Math.PI * 0.38;
+  nose.position.set(0, 0.082, 0.118);
+  const brow = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.018, 0.032), skinMat);
+  brow.position.set(0, 0.112, 0.102);
+  headGroup.add(neck, headMesh, jaw, nose, brow);
 
-  // Ojos luminosos expresivos y cejas esculpidas
+  // Ojos detallados (cuenca oscura + iris luminoso de clase)
   const eyeColor =
     classId === 'oraculo'
       ? 0x38bdf8
@@ -1083,69 +1352,80 @@ export function createHeroMesh3D(classId = 'hoplita') {
       : classId === 'campeon'
       ? 0xf97316
       : 0xfef08a;
+  const eyeSocketMat = mat(0x0f172a, { roughness: 0.9 });
   const eyeMat = mat(eyeColor, {
     emissive: eyeColor,
-    emissiveIntensity: 1.15,
+    emissiveIntensity: 1.05,
+    clearcoat: 0.8,
   });
-  for (const ex of [-0.042, 0.042]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 8), eyeMat);
-    eye.scale.set(1.3, 0.75, 0.6);
-    eye.position.set(ex, 0.092, 0.112);
-    headGroup.add(eye);
+  for (const ex of [-0.038, 0.038]) {
+    const socket = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 10), eyeSocketMat);
+    socket.scale.set(1.2, 0.72, 0.5);
+    socket.position.set(ex, 0.095, 0.102);
+    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.013, 10, 10), eyeMat);
+    iris.scale.set(1.1, 0.85, 0.65);
+    iris.position.set(ex, 0.095, 0.11);
+    headGroup.add(socket, iris);
   }
 
   // Tocado / Yelmo detallado por clase
   if (classId === 'hoplita') {
-    // Yelmo Corintio de bronce bruñido con carrilleras, protector nasal y gran penacho espartano (lophos)
-    const helm = new THREE.Mesh(new THREE.CylinderGeometry(0.134, 0.142, 0.23, 16), bronzeMat);
+    const helm = new THREE.Mesh(new THREE.CylinderGeometry(0.132, 0.14, 0.22, 24), bronzeMat);
     helm.position.y = 0.095;
-    const helmDome = new THREE.Mesh(new THREE.SphereGeometry(0.136, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55), bronzeMat);
+    const helmDome = new THREE.Mesh(new THREE.SphereGeometry(0.134, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55), bronzeMat);
     helmDome.position.y = 0.18;
-    const nasalGuard = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.09, 0.03), goldMat);
-    nasalGuard.position.set(0, 0.09, 0.135);
+    const helmBrow = new THREE.Mesh(new THREE.TorusGeometry(0.136, 0.011, 8, 24), goldMat);
+    helmBrow.rotation.x = Math.PI / 2;
+    helmBrow.position.y = 0.15;
+    const nasalGuard = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.095, 0.03), goldMat);
+    nasalGuard.position.set(0, 0.092, 0.136);
     for (const sx of [-1, 1]) {
-      const cheekPlate = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.11, 0.08), goldMat);
-      cheekPlate.position.set(sx * 0.115, 0.045, 0.085);
+      const cheekPlate = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.115, 0.085), goldMat);
+      cheekPlate.position.set(sx * 0.116, 0.045, 0.085);
       cheekPlate.rotation.y = -sx * 0.35;
       headGroup.add(cheekPlate);
     }
-    const crestHolder = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.08, 0.26), goldMat);
-    crestHolder.position.set(0, 0.24, -0.01);
-    const crest = new THREE.Mesh(
-      new THREE.BoxGeometry(0.058, 0.16, 0.36),
-      mat(0xdc2626, { roughness: 0.45, emissive: 0x7f1d1d, emissiveIntensity: 0.4 })
-    );
-    crest.position.set(0, 0.32, -0.03);
-    const crestTail = new THREE.Mesh(
-      new THREE.ConeGeometry(0.045, 0.18, 8),
-      mat(0xdc2626, { roughness: 0.45, emissive: 0x7f1d1d, emissiveIntensity: 0.4 })
-    );
-    crestTail.position.set(0, 0.22, -0.22);
-    crestTail.rotation.x = -0.45;
-    headGroup.add(helm, helmDome, nasalGuard, crestHolder, crest, crestTail);
+    const crestHolder = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.018, 10, 24, Math.PI * 0.95), goldMat);
+    crestHolder.rotation.y = Math.PI / 2;
+    crestHolder.position.set(0, 0.2, 0);
+    // Penacho curvo de crin de caballo (TubeGeometry orgánico)
+    const plumeCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, 0.23, 0.14),
+      new THREE.Vector3(0, 0.36, 0.04),
+      new THREE.Vector3(0, 0.38, -0.1),
+      new THREE.Vector3(0, 0.26, -0.22),
+      new THREE.Vector3(0, 0.12, -0.26),
+    ]);
+    const plumeMat = mat(0xdc2626, { roughness: 0.55, emissive: 0x7f1d1d, emissiveIntensity: 0.3, sheen: 0.5, sheenColor: 0xfca5a5 });
+    const crest = new THREE.Mesh(new THREE.TubeGeometry(plumeCurve, 20, 0.046, 10, false), plumeMat);
+    crest.scale.set(0.65, 1.1, 1.0);
+    headGroup.add(helm, helmDome, helmBrow, nasalGuard, crestHolder, crest);
   } else if (classId === 'campeon') {
-    // Corona tracia de Ares con cuernos curvos segmentados, barba de guerra y hombreras con púas
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.136, 0.136, 0.065, 16), goldMat);
-    band.position.y = 0.145;
-    const beard = new THREE.Mesh(new THREE.ConeGeometry(0.095, 0.14, 10), darkClothMat);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.135, 0.062, 22), goldMat);
+    band.position.y = 0.148;
+    const beard = new THREE.Mesh(new THREE.ConeGeometry(0.092, 0.145, 14), darkClothMat);
     beard.rotation.x = Math.PI;
-    beard.position.set(0, 0.01, 0.065);
-    const hairMane = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.26, 10), darkClothMat);
-    hairMane.position.set(0, 0.08, -0.08);
+    beard.position.set(0, 0.008, 0.068);
+    const hairMane = new THREE.Mesh(new THREE.ConeGeometry(0.122, 0.28, 14), darkClothMat);
+    hairMane.position.set(0, 0.08, -0.085);
     hairMane.rotation.x = 0.45;
     headGroup.add(band, beard, hairMane);
     for (const side of [-1, 1]) {
-      const hornBase = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.038, 0.11, 8), bronzeMat);
-      hornBase.position.set(side * 0.14, 0.18, 0.02);
-      hornBase.rotation.z = -side * 0.55;
-      const hornTip = new THREE.Mesh(new THREE.ConeGeometry(0.028, 0.16, 8), goldMat);
-      hornTip.position.set(side * 0.19, 0.27, 0.04);
-      hornTip.rotation.z = -side * 0.25;
-      headGroup.add(hornBase, hornTip);
+      const hornCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(side * 0.11, 0.15, 0.01),
+        new THREE.Vector3(side * 0.19, 0.2, 0.04),
+        new THREE.Vector3(side * 0.22, 0.29, 0.07),
+        new THREE.Vector3(side * 0.18, 0.36, 0.09),
+      ]);
+      const horn = new THREE.Mesh(new THREE.TubeGeometry(hornCurve, 14, 0.026, 10, false), bronzeMat);
+      const hornTip = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.075, 10), goldMat);
+      hornTip.position.set(side * 0.175, 0.38, 0.095);
+      hornTip.rotation.z = side * 0.35;
+      headGroup.add(horn, hornTip);
 
-      const pauldron = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 10), bronzeMat);
+      const pauldron = new THREE.Mesh(new THREE.SphereGeometry(0.105, 16, 12), bronzeMat);
       pauldron.position.set(side * 0.21, 0.32, 0);
-      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.11, 6), goldMat);
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.12, 8), goldMat);
       spike.position.set(side * 0.26, 0.41, 0);
       spike.rotation.z = -side * 0.4;
       torsoPivot.add(pauldron, spike);
@@ -1155,17 +1435,16 @@ export function createHeroMesh3D(classId = 'hoplita') {
     strap.rotation.z = 0.55;
     torsoPivot.add(strap);
   } else if (classId === 'arquera') {
-    // Diadema lunar de Artemisa con creciente plateado, trenza larga y carcaj con flechas emplumadas
-    const tiara = new THREE.Mesh(new THREE.TorusGeometry(0.125, 0.02, 8, 20), steelMat);
+    const tiara = new THREE.Mesh(new THREE.TorusGeometry(0.125, 0.018, 10, 24), steelMat);
     tiara.rotation.x = Math.PI / 2;
     tiara.position.y = 0.15;
     const crescent = new THREE.Mesh(
-      new THREE.TorusGeometry(0.048, 0.012, 8, 16, Math.PI * 1.35),
-      mat(0xfef08a, { emissive: 0xfacc15, emissiveIntensity: 0.9, metalness: 0.9 })
+      new THREE.TorusGeometry(0.048, 0.012, 10, 20, Math.PI * 1.35),
+      mat(0xfef08a, { emissive: 0xfacc15, emissiveIntensity: 0.9, metalness: 0.9, clearcoat: 0.5 })
     );
     crescent.position.set(0, 0.22, 0.12);
     crescent.rotation.z = Math.PI * 0.32;
-    const hair = new THREE.Mesh(new THREE.ConeGeometry(0.115, 0.28, 10), leatherMat);
+    const hair = new THREE.Mesh(new THREE.ConeGeometry(0.115, 0.3, 14), leatherMat);
     hair.position.set(0, 0.04, -0.07);
     hair.rotation.x = 0.38;
     headGroup.add(tiara, crescent, hair);
@@ -1173,88 +1452,100 @@ export function createHeroMesh3D(classId = 'hoplita') {
     const quiverGroup = new THREE.Group();
     quiverGroup.position.set(0.1, 0.24, -0.14);
     quiverGroup.rotation.z = -0.32;
-    const quiver = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.046, 0.32, 10), leatherMat);
-    const quiverRim = new THREE.Mesh(new THREE.TorusGeometry(0.058, 0.009, 6, 12), goldMat);
+    const quiver = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.046, 0.32, 14), leatherMat);
+    const quiverRim = new THREE.Mesh(new THREE.TorusGeometry(0.058, 0.009, 8, 16), goldMat);
     quiverRim.rotation.x = Math.PI / 2;
     quiverRim.position.y = 0.16;
     quiverGroup.add(quiver, quiverRim);
     for (let fi = -1; fi <= 1; fi++) {
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.12, 6), steelMat);
+      shaft.position.set(fi * 0.022, 0.18, 0);
       const fletch = new THREE.Mesh(
-        new THREE.ConeGeometry(0.018, 0.09, 5),
+        new THREE.ConeGeometry(0.018, 0.08, 6),
         mat(0x4ade80, { emissive: 0x22c55e, emissiveIntensity: 0.6 })
       );
-      fletch.position.set(fi * 0.022, 0.21, 0);
-      quiverGroup.add(fletch);
+      fletch.position.set(fi * 0.022, 0.22, 0);
+      quiverGroup.add(shaft, fletch);
     }
     torsoPivot.add(quiverGroup);
   } else if (classId === 'oraculo') {
-    // Corona de laurel délfica dorada, velo místico y halo solar flotante detrás de la cabeza
-    const wreath = new THREE.Mesh(new THREE.TorusGeometry(0.132, 0.024, 8, 20), goldMat);
+    const wreath = new THREE.Mesh(new THREE.TorusGeometry(0.132, 0.016, 10, 26), goldMat);
     wreath.rotation.x = Math.PI / 2 - 0.15;
     wreath.position.y = 0.15;
-    const veil = new THREE.Mesh(new THREE.ConeGeometry(0.155, 0.28, 12), primaryMat);
+    // Hojas de laurel individuales alrededor de la corona
+    for (let li = 0; li < 12; li++) {
+      const a = (li / 12) * Math.PI * 2;
+      const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.02, 8, 6), goldMat);
+      leaf.scale.set(0.55, 1.35, 0.3);
+      leaf.position.set(Math.cos(a) * 0.136, 0.16 + Math.sin(a) * 0.015, Math.sin(a) * 0.136);
+      leaf.rotation.y = -a;
+      headGroup.add(leaf);
+    }
+    const veil = new THREE.Mesh(new THREE.ConeGeometry(0.155, 0.3, 18), primaryMat);
     veil.position.set(0, 0.14, -0.02);
     const astralHalo = new THREE.Mesh(
-      new THREE.TorusGeometry(0.22, 0.014, 8, 28),
-      mat(0x38bdf8, { emissive: 0x0284c7, emissiveIntensity: 1.2 })
+      new THREE.TorusGeometry(0.22, 0.013, 10, 36),
+      mat(0x38bdf8, { emissive: 0x0284c7, emissiveIntensity: 1.2, clearcoat: 0.7 })
     );
     astralHalo.position.set(0, 0.12, -0.09);
-    headGroup.add(wreath, veil, astralHalo);
+    const innerHalo = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.007, 8, 28), goldMat);
+    innerHalo.position.set(0, 0.12, -0.09);
+    headGroup.add(wreath, veil, astralHalo, innerHalo);
   } else if (classId === 'necromante') {
-    // Capucha estigia profunda, máscara de cráneo esculpida, hombreras óseas y orbes de almas
-    const hood = new THREE.Mesh(new THREE.ConeGeometry(0.175, 0.3, 12), darkClothMat);
+    const hood = new THREE.Mesh(new THREE.ConeGeometry(0.175, 0.32, 18), darkClothMat);
     hood.position.set(0, 0.165, -0.01);
-    const skullMask = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), boneMat);
+    const skullMask = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 14), boneMat);
     skullMask.scale.set(0.9, 1.0, 0.65);
     skullMask.position.set(0, 0.085, 0.075);
-    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.055, 0.06), boneMat);
-    jaw.position.set(0, 0.025, 0.09);
-    headGroup.add(hood, skullMask, jaw);
+    const maskJaw = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.052, 0.058), boneMat);
+    maskJaw.position.set(0, 0.025, 0.09);
+    headGroup.add(hood, skullMask, maskJaw);
     for (const side of [-1, 1]) {
-      const boneShoulder = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), boneMat);
+      const boneShoulder = new THREE.Mesh(new THREE.SphereGeometry(0.092, 14, 10), boneMat);
       boneShoulder.scale.set(1.1, 0.85, 1.0);
       boneShoulder.position.set(side * 0.2, 0.33, 0);
-      const ribHorn = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.12, 6), boneMat);
+      const ribHorn = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.13, 8), boneMat);
       ribHorn.position.set(side * 0.25, 0.4, -0.02);
       ribHorn.rotation.z = -side * 0.5;
       torsoPivot.add(boneShoulder, ribHorn);
     }
   } else if (classId === 'sombra') {
-    // Capucha nocturna de Nix, máscara de las Erinias, diadema carmesí y bufanda flotante
-    const cowl = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.27, 12), darkClothMat);
+    const cowl = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.29, 18), darkClothMat);
     cowl.position.set(0, 0.155, 0);
-    const mask = new THREE.Mesh(new THREE.BoxGeometry(0.142, 0.085, 0.09), primaryMat);
-    mask.position.set(0, 0.052, 0.09);
+    const mask = new THREE.Mesh(new THREE.CylinderGeometry(0.118, 0.098, 0.085, 14, 1, false, -Math.PI * 0.45, Math.PI * 0.9), primaryMat);
+    mask.position.set(0, 0.052, 0.02);
     const browGem = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.032, 0),
-      mat(0xf472b6, { emissive: 0xdb2777, emissiveIntensity: 1.2 })
+      new THREE.OctahedronGeometry(0.032, 1),
+      mat(0xf472b6, { emissive: 0xdb2777, emissiveIntensity: 1.2, clearcoat: 0.8 })
     );
     browGem.position.set(0, 0.15, 0.125);
     headGroup.add(cowl, mask, browGem);
   } else if (classId === 'coribante') {
-    // Testuz de Lobo de Licaón esculpido con orejas, colmillos, ojos verdes y cuernos de carnero de Pan
-    const pelt = new THREE.Mesh(new THREE.SphereGeometry(0.155, 12, 10), leatherMat);
+    const pelt = new THREE.Mesh(new THREE.SphereGeometry(0.155, 18, 14), leatherMat);
     pelt.scale.set(1.05, 0.95, 1.15);
     pelt.position.set(0, 0.16, 0.01);
-    const snout = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.16, 8), leatherMat);
+    const snout = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.165, 12), leatherMat);
     snout.rotation.x = Math.PI / 2;
     snout.position.set(0, 0.185, 0.165);
-    const noseTip = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 6), darkMetalMat);
-    noseTip.position.set(0, 0.19, 0.24);
+    const noseTip = new THREE.Mesh(new THREE.SphereGeometry(0.022, 10, 10), darkMetalMat);
+    noseTip.position.set(0, 0.19, 0.242);
     headGroup.add(pelt, snout, noseTip);
     for (const side of [-1, 1]) {
-      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.036, 0.095, 5), leatherMat);
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.036, 0.1, 8), leatherMat);
       ear.position.set(side * 0.1, 0.27, 0.02);
       ear.rotation.z = -side * 0.25;
-      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.038, 0.21, 8), goldMat);
-      horn.position.set(side * 0.15, 0.23, -0.02);
-      horn.rotation.z = -side * 0.65;
-      horn.rotation.x = -0.32;
+      const ramCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(side * 0.11, 0.19, 0.01),
+        new THREE.Vector3(side * 0.18, 0.23, -0.02),
+        new THREE.Vector3(side * 0.21, 0.17, -0.06),
+        new THREE.Vector3(side * 0.17, 0.13, 0.01),
+      ]);
+      const horn = new THREE.Mesh(new THREE.TubeGeometry(ramCurve, 14, 0.024, 10, false), goldMat);
       headGroup.add(ear, horn);
     }
   }
 
-  // Brazos articulados con bíceps, brazaletes repujados (bracers), manos y Armas 3D
+  // Brazos articulados con bíceps, codera, brazalete repujado y mano esculpida
   const leftArmPivot = new THREE.Group();
   leftArmPivot.position.set(-(chestW * 0.5 + 0.058), 0.31, 0);
   const rightArmPivot = new THREE.Group();
@@ -1262,16 +1553,23 @@ export function createHeroMesh3D(classId = 'hoplita') {
   torsoPivot.add(leftArmPivot, rightArmPivot);
 
   for (const pivot of [leftArmPivot, rightArmPivot]) {
-    const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.044, 0.15, 10), skinMat);
+    const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(0.054, 0.044, 0.15, 14), skinMat);
     upperArm.position.y = -0.07;
-    const bracer = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.042, 0.13, 10), bronzeMat);
+    const elbowGuard = new THREE.Mesh(new THREE.SphereGeometry(0.044, 12, 10), goldMat);
+    elbowGuard.scale.set(0.95, 0.85, 0.85);
+    elbowGuard.position.set(0, -0.125, -0.015);
+    const bracer = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.04, 0.13, 14), bronzeMat);
     bracer.position.y = -0.18;
-    const bracerRing = new THREE.Mesh(new THREE.TorusGeometry(0.048, 0.007, 6, 12), goldMat);
+    const bracerRing = new THREE.Mesh(new THREE.TorusGeometry(0.049, 0.007, 8, 16), goldMat);
     bracerRing.rotation.x = Math.PI / 2;
     bracerRing.position.y = -0.12;
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.042, 8, 8), skinMat);
-    hand.position.y = -0.25;
-    pivot.add(upperArm, bracer, bracerRing, hand);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10), skinMat);
+    hand.scale.set(0.9, 1.15, 0.8);
+    hand.position.y = -0.255;
+    const thumb = new THREE.Mesh(new THREE.CapsuleGeometry ? new THREE.CapsuleGeometry(0.012, 0.025, 4, 8) : new THREE.CylinderGeometry(0.011, 0.011, 0.032, 8), skinMat);
+    thumb.position.set(0.022, -0.255, 0.024);
+    thumb.rotation.x = 0.5;
+    pivot.add(upperArm, elbowGuard, bracer, bracerRing, hand, thumb);
   }
 
   // Slots modulares para equipamiento visual en el modelo 3D
@@ -2463,18 +2761,25 @@ export class ArchRenderer3D {
       });
       this.renderer.shadowMap.enabled = true;
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      this.renderer.toneMappingExposure = 1.12;
+      if (THREE.SRGBColorSpace) this.renderer.outputColorSpace = THREE.SRGBColorSpace;
       this.renderer.setClearColor(0x090b10, 1);
 
       this.scene = new THREE.Scene();
       this.camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 400);
 
-      // Iluminación atmosférica del Aqueronte
-      this.ambientLight = new THREE.AmbientLight(0x8b9bb4, 0.95);
+      // Iluminación atmosférica realista (Hemisphere + Ambient + Directional 2048px)
+      this.hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 0.55);
+      this.scene.add(this.hemiLight);
+
+      this.ambientLight = new THREE.AmbientLight(0x8b9bb4, 0.75);
       this.scene.add(this.ambientLight);
 
       this.dirLight = new THREE.DirectionalLight(0xfef3c7, 1.35);
       this.dirLight.castShadow = true;
-      this.dirLight.shadow.mapSize.set(1024, 1024);
+      this.dirLight.shadow.mapSize.set(2048, 2048);
+      this.dirLight.shadow.bias = -0.0004;
       this.dirLight.shadow.camera.near = 10;
       this.dirLight.shadow.camera.far = 160;
       const d = 16;
@@ -2534,7 +2839,7 @@ export class ArchRenderer3D {
 
   resize(viewW, viewH) {
     if (!this.enabled) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = Math.min(2.5, window.devicePixelRatio || 1);
     this.viewW = viewW;
     this.viewH = viewH;
     this.renderer.setPixelRatio(dpr);
@@ -2648,62 +2953,18 @@ export class ArchRenderer3D {
 
     const { width, height, grid, biome, isOverworld, isFinalFloor, terrain, elevation } = dungeon;
 
-    // Atmósfera e iluminación según Nivel 1 (Sol mediterráneo) vs Inframundo / Trono Piso 22
-    if (isOverworld) {
-      this.renderer?.setClearColor?.(0x163954, 1);
-      this.ambientLight.color.set(0xe0f2fe);
-      this.ambientLight.intensity = 1.45;
-      this.dirLight.color.set(0xfffbeb);
-      this.dirLight.intensity = 1.95;
-      this.heroLight.intensity = 1.1;
-    } else if (isFinalFloor) {
-      this.renderer?.setClearColor?.(0x0c0614, 1);
-      this.ambientLight.color.set(0xa78bfa);
-      this.ambientLight.intensity = 1.05;
-      this.dirLight.color.set(0xfde68a);
-      this.dirLight.intensity = 1.45;
-      this.heroLight.intensity = 2.0;
-    } else {
-      // Atmósfera distintiva según el Templo Mítico de cada estrato (Zelda OoT)
-      const temple = biome?.templeId || biome?.id;
-      if (temple === 'bosque') {
-        this.renderer?.setClearColor?.(0x0a140d, 1);
-        this.ambientLight.color.set(0x34d399);
-        this.ambientLight.intensity = 0.95;
-        this.dirLight.color.set(0xa7f3d0);
-        this.dirLight.intensity = 1.35;
-      } else if (temple === 'fuego') {
-        this.renderer?.setClearColor?.(0x140705, 1);
-        this.ambientLight.color.set(0xf97316);
-        this.ambientLight.intensity = 1.1;
-        this.dirLight.color.set(0xfed7aa);
-        this.dirLight.intensity = 1.4;
-      } else if (temple === 'agua') {
-        this.renderer?.setClearColor?.(0x05131a, 1);
-        this.ambientLight.color.set(0x38bdf8);
-        this.ambientLight.intensity = 1.15;
-        this.dirLight.color.set(0xbae6fd);
-        this.dirLight.intensity = 1.45;
-      } else if (temple === 'sombras') {
-        this.renderer?.setClearColor?.(0x0d0714, 1);
-        this.ambientLight.color.set(0xc084fc);
-        this.ambientLight.intensity = 0.9;
-        this.dirLight.color.set(0xe9d5ff);
-        this.dirLight.intensity = 1.25;
-      } else if (temple === 'espiritu') {
-        this.renderer?.setClearColor?.(0x1a1208, 1);
-        this.ambientLight.color.set(0xfacc15);
-        this.ambientLight.intensity = 1.2;
-        this.dirLight.color.set(0xfef08a);
-        this.dirLight.intensity = 1.5;
-      } else {
-        this.renderer?.setClearColor?.(0x07090f, 1);
-        this.ambientLight.color.set(0x8b9bb4);
-        this.ambientLight.intensity = 0.95;
-        this.dirLight.color.set(0xfef3c7);
-        this.dirLight.intensity = 1.35;
-      }
-      this.heroLight.intensity = 1.8;
+    // Atmósfera e iluminación modular resuelta desde la temática del metaverso
+    const theme = getMetaverseTheme(dungeon.themeId);
+    const lighting = resolveBiomeLighting(biome, theme);
+    this.renderer?.setClearColor?.(lighting.clearColor ?? 0x07090f, 1);
+    this.ambientLight.color.set(lighting.ambientColor ?? 0x8b9bb4);
+    this.ambientLight.intensity = lighting.ambientIntensity ?? 0.95;
+    this.dirLight.color.set(lighting.dirColor ?? 0xfef3c7);
+    this.dirLight.intensity = lighting.dirIntensity ?? 1.35;
+    this.heroLight.intensity = lighting.heroLightIntensity ?? (isOverworld ? 1.1 : isFinalFloor ? 2.0 : 1.8);
+    if (this.hemiLight) {
+      this.hemiLight.color.set(lighting.dirColor ?? 0xdbeafe);
+      this.hemiLight.groundColor.set(lighting.clearColor ?? 0x1e293b);
     }
 
     const matCache = new Map();
@@ -4742,35 +5003,114 @@ export class HeroPreview3D {
   constructor(canvas) {
     this.canvas = canvas;
     this.enabled = false;
+    this.dragActive = false;
+    this.lastPointerX = 0;
+    this.spinVelocity = 0;
+    this.manualSpin = 0;
     try {
-      this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-      this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-      this.renderer.setSize(canvas.width || 150, canvas.height || 150, false);
+      this.renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true,
+        alpha: true,
+        powerPreference: 'high-performance',
+      });
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      this.renderer.toneMappingExposure = 1.18;
+      if (THREE.SRGBColorSpace) this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      const initW = canvas.clientWidth || canvas.width || 460;
+      const initH = canvas.clientHeight || canvas.height || 500;
+      this.renderer.setPixelRatio(Math.min(2.5, window.devicePixelRatio || 1));
+      this.renderer.setSize(initW, initH, false);
 
       this.scene = new THREE.Scene();
-      this.camera = new THREE.PerspectiveCamera(34, (canvas.width || 150) / (canvas.height || 150), 0.1, 20);
-      this.camera.position.set(0, 0.82, 2.05);
-      this.camera.lookAt(0, 0.42, 0);
+      this.camera = new THREE.PerspectiveCamera(30, initW / initH, 0.1, 25);
+      this.camera.position.set(0, 0.88, 1.82);
+      this.camera.lookAt(0, 0.56, 0);
 
-      const amb = new THREE.AmbientLight(0x94a3b8, 1.1);
-      const key = new THREE.DirectionalLight(0xfef08a, 1.8);
-      key.position.set(2, 3, 2.5);
-      const rim = new THREE.PointLight(0xf97316, 2.2, 5);
-      rim.position.set(-1.5, 1.2, -1.2);
-      this.scene.add(amb, key, rim);
+      // Iluminación de estudio de 3 puntos + Hemisphere + Rim de clase
+      this.hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x1e293b, 0.85);
+      this.ambLight = new THREE.AmbientLight(0x94a3b8, 0.55);
 
-      // Pedestal de mármol y bronce
-      const ped = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.42, 0.48, 0.1, 20),
-        mat(0x1e293b, { metalness: 0.5, roughness: 0.4 })
+      this.keyLight = new THREE.DirectionalLight(0xfff3d6, 2.2);
+      this.keyLight.position.set(2.1, 3.4, 2.6);
+      this.keyLight.castShadow = true;
+      this.keyLight.shadow.mapSize.set(1024, 1024);
+      this.keyLight.shadow.bias = -0.0005;
+      this.keyLight.shadow.camera.near = 0.5;
+      this.keyLight.shadow.camera.far = 10;
+      const sd = 1.2;
+      this.keyLight.shadow.camera.left = -sd;
+      this.keyLight.shadow.camera.right = sd;
+      this.keyLight.shadow.camera.top = sd;
+      this.keyLight.shadow.camera.bottom = -sd;
+
+      this.fillLight = new THREE.DirectionalLight(0x7dd3fc, 0.95);
+      this.fillLight.position.set(-2.4, 1.5, 1.4);
+
+      this.rimLight = new THREE.PointLight(0xf97316, 3.2, 6, 1.4);
+      this.rimLight.position.set(-1.35, 1.35, -1.35);
+
+      this.underLight = new THREE.PointLight(0xe5b869, 1.5, 3, 1.6);
+      this.underLight.position.set(0, 0.12, 0.35);
+
+      this.scene.add(this.hemiLight, this.ambLight, this.keyLight, this.fillLight, this.rimLight, this.underLight);
+
+      // Pedestal monumental de mármol veteado y bronce dorado con anillo rúnico
+      const pedBase = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.56, 0.64, 0.08, 36),
+        mat(0x0f172a, { metalness: 0.35, roughness: 0.45, bumpKind: 'stone', bumpScale: 0.014 })
       );
-      ped.position.y = -0.05;
-      const trim = new THREE.Mesh(
-        new THREE.TorusGeometry(0.43, 0.02, 8, 24),
-        mat(0xe5b869, { metalness: 0.85, roughness: 0.25 })
+      pedBase.position.y = -0.09;
+      pedBase.receiveShadow = true;
+
+      const pedTop = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.46, 0.52, 0.07, 36),
+        mat(0x1e293b, { metalness: 0.45, roughness: 0.35, bumpKind: 'stone', bumpScale: 0.012, clearcoat: 0.25 })
       );
-      trim.rotation.x = Math.PI / 2;
-      this.scene.add(ped, trim);
+      pedTop.position.y = -0.035;
+      pedTop.receiveShadow = true;
+
+      this.pedTrim = new THREE.Mesh(
+        new THREE.TorusGeometry(0.47, 0.018, 12, 42),
+        mat(0xe5b869, { metalness: 0.92, roughness: 0.18, bumpKind: 'metal', clearcoat: 0.4 })
+      );
+      this.pedTrim.rotation.x = Math.PI / 2;
+      this.pedTrim.position.y = 0.002;
+
+      this.pedRuneRing = new THREE.Mesh(
+        new THREE.RingGeometry(0.36, 0.42, 40),
+        new THREE.MeshBasicMaterial({ color: 0xe5b869, side: THREE.DoubleSide, transparent: true, opacity: 0.42 })
+      );
+      this.pedRuneRing.rotation.x = -Math.PI / 2;
+      this.pedRuneRing.position.y = 0.003;
+
+      this.scene.add(pedBase, pedTop, this.pedTrim, this.pedRuneRing);
+
+      // Partículas ambientales flotantes (ascuas / polvo dorado)
+      this.embers = [];
+      const emberGeo = new THREE.OctahedronGeometry(0.014, 0);
+      for (let i = 0; i < 18; i++) {
+        const em = new THREE.Mesh(
+          emberGeo,
+          new THREE.MeshBasicMaterial({ color: i % 2 === 0 ? 0xfacc15 : 0xf97316, transparent: true, opacity: 0.65 })
+        );
+        const angle = (i / 18) * Math.PI * 2;
+        const rad = 0.35 + (i % 4) * 0.12;
+        em.position.set(Math.cos(angle) * rad, 0.1 + (i % 6) * 0.22, Math.sin(angle) * rad);
+        em.userData = { angle, rad, speed: 0.25 + (i % 5) * 0.08, baseY: em.position.y, phase: i * 0.7 };
+        this.scene.add(em);
+        this.embers.push(em);
+      }
+
+      // Rotación interactiva con ratón / dedo
+      this._bindPointerControls();
+      if (typeof ResizeObserver !== 'undefined') {
+        this._ro = new ResizeObserver(() => this.resize());
+        this._ro.observe(canvas);
+      }
 
       this.heroMesh = null;
       this.lastTs = performance.now();
@@ -4781,13 +5121,66 @@ export class HeroPreview3D {
     }
   }
 
+  _bindPointerControls() {
+    if (!this.canvas?.addEventListener) return;
+    this.canvas.style.cursor = 'grab';
+    this.canvas.addEventListener('pointerdown', (e) => {
+      this.dragActive = true;
+      this.lastPointerX = e.clientX;
+      this.spinVelocity = 0;
+      this.canvas.style.cursor = 'grabbing';
+      this.canvas.setPointerCapture?.(e.pointerId);
+    });
+    this.canvas.addEventListener('pointermove', (e) => {
+      if (!this.dragActive) return;
+      const dx = e.clientX - this.lastPointerX;
+      this.lastPointerX = e.clientX;
+      const delta = dx * 0.014;
+      this.manualSpin += delta;
+      this.spinVelocity = delta * 18;
+    });
+    const endDrag = () => {
+      this.dragActive = false;
+      this.canvas.style.cursor = 'grab';
+    };
+    this.canvas.addEventListener('pointerup', endDrag);
+    this.canvas.addEventListener('pointercancel', endDrag);
+  }
+
+  resize() {
+    if (!this.enabled || !this.canvas) return;
+    const w = this.canvas.clientWidth || this.canvas.width || 460;
+    const h = this.canvas.clientHeight || this.canvas.height || 500;
+    if (w <= 0 || h <= 0) return;
+    this.renderer.setPixelRatio(Math.min(2.5, window.devicePixelRatio || 1));
+    this.renderer.setSize(w, h, false);
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+  }
+
+  setThemeColor(hexOrCssColor) {
+    if (!this.enabled) return;
+    try {
+      const col = new THREE.Color(hexOrCssColor);
+      if (this.pedRuneRing?.material) this.pedRuneRing.material.color.copy(col);
+      if (this.underLight) this.underLight.color.copy(col);
+    } catch {
+      // ignore invalid color
+    }
+  }
+
   setClass(classId, equipment = null) {
     if (!this.enabled) return;
+    this.resize();
     if (this.heroMesh) {
       this.scene.remove(this.heroMesh);
       disposeObject3D(this.heroMesh);
     }
     this.heroMesh = createHeroMesh3D(classId);
+    const cls = HERO_CLASSES[classId];
+    if (cls && this.rimLight) {
+      this.rimLight.color.set(cls.color);
+    }
     if (equipment) {
       updateHeroEquipmentVisuals(this.heroMesh, equipment, classId);
     }
@@ -4805,17 +5198,37 @@ export class HeroPreview3D {
     this.lastTs = ts;
     if (this.heroMesh) {
       const rig = this.heroMesh.userData.rig;
-      rig.facing += dt * 0.95;
-      if (Math.floor(ts / 2600) % 2 === 0 && rig.attackTimer <= 0 && (ts % 2600) < 60) {
+      if (!this.dragActive) {
+        if (Math.abs(this.spinVelocity) > 0.02) {
+          rig.facing += this.spinVelocity * dt;
+          this.spinVelocity *= Math.pow(0.08, dt);
+        } else {
+          rig.facing += dt * 0.55;
+        }
+      } else {
+        rig.facing += this.manualSpin;
+        this.manualSpin = 0;
+      }
+      if (Math.floor(ts / 3000) % 2 === 0 && rig.attackTimer <= 0 && (ts % 3000) < 60) {
         rig.attackTimer = 0.28;
       }
       updateActorRig3D(this.heroMesh, {
         dt,
-        moving: true,
+        moving: false,
         targetFacing: rig.facing,
         furyActive: false,
         shieldActive: rig.classId === 'hoplita',
       });
+    }
+    if (this.embers) {
+      const tSec = ts * 0.001;
+      for (const em of this.embers) {
+        const d = em.userData;
+        em.position.y = ((d.baseY + tSec * d.speed) % 1.35) + 0.05;
+        em.position.x = Math.cos(d.angle + tSec * 0.3) * d.rad;
+        em.position.z = Math.sin(d.angle + tSec * 0.3) * d.rad;
+        em.rotation.y = tSec * 2 + d.phase;
+      }
     }
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame((next) => this._loop(next));

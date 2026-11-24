@@ -15,6 +15,12 @@ export function createSideEvolvePanelController({ game, openDrawer }) {
   const miniBadge = document.getElementById('sideMiniBadge');
   const autoStatusLabel = document.getElementById('sideAutoStatusLabel');
 
+  const companionBtn = document.getElementById('btnSideToggleCompanion');
+  const companionBtnText = document.getElementById('sideCompanionBtnText');
+  const companionCount = document.getElementById('sideCompanionCount');
+  const companionList = document.getElementById('sideCompanionList');
+  const companionHint = document.getElementById('sideCompanionHint');
+
   const atkVal = document.getElementById('sideAtkVal');
   const defVal = document.getElementById('sideDefVal');
   const critVal = document.getElementById('sideCritVal');
@@ -59,6 +65,10 @@ export function createSideEvolvePanelController({ game, openDrawer }) {
 
   autoBtn?.addEventListener('click', () => {
     game.toggleAutoManage();
+  });
+
+  companionBtn?.addEventListener('click', () => {
+    game.toggleCompanionMode();
   });
 
   // Clic en cualquiera de las ranuras abre la pestaña de ítems para inspeccionar
@@ -174,6 +184,67 @@ export function createSideEvolvePanelController({ game, openDrawer }) {
       const totalBaseSkillPts = (hero.treePoints || [0, 0, 0]).reduce((a, b) => a + b, 0);
       const synPct = Math.round(totalBaseSkillPts * 8);
       talentBonus.textContent = `+${synPct}% Sinergia (${totalBaseSkillPts} pts)`;
+    }
+
+    // 5. Compañeros aliados
+    const companions = state.companions || [];
+    const compEnabled = Boolean(state.companionModeEnabled ?? game.companionModeEnabled);
+    const compTarget = state.companionTarget ?? 0;
+
+    if (companionBtn) {
+      companionBtn.classList.toggle('is-active', compEnabled);
+      if (companionBtnText) companionBtnText.textContent = compEnabled ? 'ALIADOS ON' : 'ALIADOS OFF';
+    }
+    if (companionCount) {
+      companionCount.textContent = `${companions.length}/${compTarget}`;
+    }
+    if (companionHint) {
+      if (!compEnabled) {
+        companionHint.textContent = 'Modo Compañeros inactivo';
+        companionHint.style.color = '#94a3b8';
+      } else if (compTarget === 0) {
+        companionHint.textContent = 'Alcanza Nivel 5 para invocar a tu primer aliado';
+        companionHint.style.color = '#e5b869';
+      } else if (companions.length < compTarget) {
+        companionHint.textContent = `Próximo aliado: Nivel ${[5, 10, 15, 20][companions.length] || 5}`;
+        companionHint.style.color = '#facc15';
+      } else {
+        companionHint.textContent = '¡Grupo completo!';
+        companionHint.style.color = '#4ade80';
+      }
+    }
+
+    if (companionList) {
+      companionList.innerHTML = '';
+      const CLASS_IDS = {
+        campeon: 'Campeón de Ares',
+        hoplita: 'Hoplita de Esparta',
+        arquera: 'Cazadora de Artemisa',
+        oraculo: 'Oráculo de Delfos',
+        necromante: 'Necromante del Estigia',
+        sombra: 'Sombra de Némesis',
+        coribante: 'Coribante de Pan',
+      };
+      for (const c of companions) {
+        const row = document.createElement('div');
+        row.className = 'companion-row';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'companion-name';
+        nameEl.textContent = CLASS_IDS[c.classId] || c.name || 'Aliado';
+        const hpEl = document.createElement('span');
+        hpEl.className = 'companion-hp';
+        const hpPct = c.maxHp > 0 ? Math.round((c.hp / c.maxHp) * 100) : 0;
+        hpEl.textContent = `${Math.ceil(c.hp)}/${c.maxHp}`;
+        hpEl.style.color = hpPct > 50 ? '#4ade80' : hpPct > 25 ? '#facc15' : '#ef4444';
+        row.append(nameEl, hpEl);
+        companionList.appendChild(row);
+      }
+      if (companions.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'companion-empty';
+        empty.textContent = 'Sin aliados invocados';
+        companionList.appendChild(empty);
+      }
     }
   }
 

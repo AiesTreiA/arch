@@ -5,6 +5,12 @@
  */
 import { HERO_CLASSES } from '../core/combat.js';
 import { CLASS_BASE_ITEMS } from '../core/loot.js';
+import {
+  DEFAULT_THEME_ID,
+  applyThemeToDocument,
+  getMetaverseTheme,
+  listMetaverseThemes,
+} from '../core/themes.js';
 import { archAudio } from '../game/audio.js';
 import { ArchGame } from '../game/engine.js';
 import { HeroPreview3D } from '../game/models3d.js';
@@ -24,6 +30,7 @@ const $ = (id) => document.getElementById(id);
 
 export function initArchUi() {
   let selectedClass = 'hoplita';
+  let selectedTheme = DEFAULT_THEME_ID;
   let touchMode = getSavedTouchMode();
   let lastUiState = null;
   let toastTimer = null;
@@ -32,6 +39,7 @@ export function initArchUi() {
 
   const classGrid = $('classGrid');
   const previewBox = $('classPreviewBox');
+  const themePillsEl = $('themePills');
   const startModal = $('startModal');
   const gameDrawer = $('gameDrawer');
   const drawerSheet = gameDrawer.querySelector('.drawer-sheet');
@@ -41,6 +49,30 @@ export function initArchUi() {
   const toastEl = $('hudToast');
 
   const heroPreview3d = new HeroPreview3D($('heroPreviewCanvas'));
+
+  function renderThemePills() {
+    const theme = getMetaverseTheme(selectedTheme);
+    applyThemeToDocument(theme);
+    heroPreview3d.setThemeColor(theme.ui?.accent || '#e5b869');
+    if ($('startTitle')) $('startTitle').textContent = `🔥 ${theme.title}`;
+    if ($('startIntroText')) $('startIntroText').textContent = theme.intro;
+    if ($('startActTag')) $('startActTag').textContent = theme.badge;
+
+    if (!themePillsEl) return;
+    themePillsEl.innerHTML = '';
+    for (const t of listMetaverseThemes()) {
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = `theme-pill ${t.id === selectedTheme ? 'is-active' : ''}`;
+      pill.textContent = t.name;
+      pill.title = t.badge || t.name;
+      pill.onclick = () => {
+        selectedTheme = t.id;
+        renderThemePills();
+      };
+      themePillsEl.appendChild(pill);
+    }
+  }
 
   function showToast({ title = '', message = '', color = '#e5b869', actionLabel = '', onAction = null, duration = 3800 }) {
     clearTimeout(toastTimer);
@@ -393,6 +425,15 @@ export function initArchUi() {
         if (!storyModal || !storyModal.open) {
           openStoryDialog();
         }
+        return;
+      }
+      if (ev.type === 'companion') {
+        showToast({
+          title: `⚔️ ${ev.title}`,
+          message: ev.message,
+          color: '#4ade80',
+          duration: 4600,
+        });
         return;
       }
       if (ev.type === 'loot' && ev.item) {
@@ -824,6 +865,7 @@ export function initArchUi() {
       classId: selectedClass,
       heroName: $('heroNameInput').value,
       seed: $('seedInput').value,
+      themeId: selectedTheme,
     });
   }
 
@@ -834,6 +876,7 @@ export function initArchUi() {
     if (gameDrawer.open) closeDrawer();
     $('btnCancelStart').hidden = !game.running;
     if (!startModal.open) startModal.showModal();
+    requestAnimationFrame(() => heroPreview3d.resize());
   };
   $('btnCancelStart').onclick = () => {
     if (game.running && startModal.open) startModal.close();
@@ -846,6 +889,7 @@ export function initArchUi() {
     if (gameOverModal.open) gameOverModal.close();
     $('btnCancelStart').hidden = true;
     if (!startModal.open) startModal.showModal();
+    requestAnimationFrame(() => heroPreview3d.resize());
   };
   $('btnGameOverRetry').onclick = () => launchRun({ withFullscreen: fullscreenCtrl.isActive() });
 
@@ -920,8 +964,10 @@ export function initArchUi() {
 
   syncAudioUi();
   applyTouchMode();
+  renderThemePills();
   renderClassCards();
   startModal.showModal();
+  requestAnimationFrame(() => heroPreview3d.resize());
 
   // Exponer utilidades para depuración / pruebas si hace falta
   return { game, openDrawer, closeDrawer, fullscreenCtrl, lastState: () => lastUiState };

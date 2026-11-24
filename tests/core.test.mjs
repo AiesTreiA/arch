@@ -1141,3 +1141,133 @@ test('personajes 3D y enemigos mejorados tienen escultura anatómica detallada, 
   engine.playFanfare('victory');
   engine.playEnemyDeath({ isBoss: true, kind: 'hades' });
 });
+
+test('sistema modular de temáticas de metaverso y modelos 3D de héroes detallados', async () => {
+  const {
+    DEFAULT_THEME_ID,
+    getMetaverseTheme,
+    listMetaverseThemes,
+    registerMetaverseTheme,
+    resolveBiomeLighting,
+  } = await import('../src/core/themes.js');
+  const { HERO_CLASSES } = await import('../src/core/combat.js');
+  const { createHeroMesh3D } = await import('../src/game/models3d.js');
+
+  const themes = listMetaverseThemes();
+  assert.ok(themes.length >= 4, 'Deben existir al menos 4 temáticas de metaverso integradas');
+  assert.equal(getMetaverseTheme(DEFAULT_THEME_ID).id, 'mitologia_griega');
+
+  // Verificar generación de mundos en otro metaverso integrado
+  const nordicOverworld = generateDungeon({ level: 1, seed: 'test-nordic', themeId: 'valhalla_nordico' });
+  assert.equal(nordicOverworld.themeId, 'valhalla_nordico');
+  assert.equal(nordicOverworld.biome.id, 'midgard');
+  assert.ok(nordicOverworld.zones.some((z) => z.id === 'kattegat'));
+
+  const cyberFloor2 = generateDungeon({ level: 2, seed: 'test-cyber', themeId: 'ciber_olimpo' });
+  assert.equal(cyberFloor2.themeId, 'ciber_olimpo');
+  assert.equal(cyberFloor2.biome.id, 'bio_domo');
+  const cyberLight = resolveBiomeLighting(cyberFloor2.biome, getMetaverseTheme('ciber_olimpo'));
+  assert.equal(cyberLight.clearColor, 0x051410);
+
+  // Registrar una temática personalizada modular y verificar que funciona sin tocar el motor
+  const customTheme = registerMetaverseTheme({
+    id: 'desierto_faraon',
+    name: 'Egipto Mítico',
+    shortName: 'Kemet',
+    badge: 'Del Nilo a la Duat',
+    title: 'La Hoguera del Nilo',
+    intro: 'Cruza las dunas de Kemet.',
+    worldLabel: 'Nilo',
+    ui: { accent: '#fbbf24', accentStrong: '#f59e0b', glow: 'rgba(251,191,36,0.35)' },
+    overworldBiome: {
+      id: 'kemet',
+      name: 'Kemet · Valle del Nilo',
+      floor: '#c29b61',
+      wall: '#785630',
+      accent: '#fbbf24',
+      isOverworld: true,
+      lighting: { clearColor: 0x261a0a, ambientColor: 0xfde68a, ambientIntensity: 1.4, dirColor: 0xfffbeb, dirIntensity: 1.9 },
+    },
+    astralBiome: { id: 'duat_celeste', name: 'Duat Celeste', floor: '#1e1b4b', wall: '#312e81', accent: '#38bdf8', isOverworld: true, isNewWorld: true },
+    finalBiome: { id: 'trono_apofis', name: 'Trono de Apofis', floor: '#1a0b1e', wall: '#4c1d95', accent: '#f97316', isFinalFloor: true },
+    dungeonBiomes: [
+      { id: 'tumba_1', templeId: 'bosque', name: 'Cámara de Osiris', floor: '#1f2920', wall: '#334535', accent: '#34d399', particles: 'spores' },
+    ],
+    overworldZones: [
+      { id: 'menfis', name: 'Menfis', subtitle: 'Puerto del Nilo', fx: 0.2, fy: 0.72, radiusFrac: 0.16, color: '#fbbf24' },
+      { id: 'oasis', name: 'Oasis', subtitle: 'Palmeras', fx: 0.22, fy: 0.23, radiusFrac: 0.17, color: '#34d399' },
+      { id: 'karnak', name: 'Karnak', subtitle: 'Templo', fx: 0.54, fy: 0.46, radiusFrac: 0.14, color: '#facc15' },
+      { id: 'mar_rojo', name: 'Mar Rojo', subtitle: 'Costa', fx: 0.76, fy: 0.75, radiusFrac: 0.17, color: '#38bdf8' },
+      { id: 'piramide', name: 'Gran Pirámide', subtitle: 'Descenso', fx: 0.8, fy: 0.21, radiusFrac: 0.15, color: '#f97316' },
+    ],
+  });
+  assert.equal(getMetaverseTheme('desierto_faraon').id, customTheme.id);
+  const kemetMap = generateDungeon({ level: 1, seed: 'kemet-1', themeId: 'desierto_faraon' });
+  assert.equal(kemetMap.biome.id, 'kemet');
+  assert.equal(resolveBiomeLighting(kemetMap.biome, customTheme).clearColor, 0x261a0a);
+
+  // Verificar que los modelos 3D de héroes tienen alto detalle anatómico (>= 55 mallas por héroe)
+  for (const classId of Object.keys(HERO_CLASSES)) {
+    const heroMesh = createHeroMesh3D(classId);
+    let meshCount = 0;
+    heroMesh.traverse((c) => {
+      if (c.isMesh) meshCount++;
+    });
+    assert.ok(meshCount >= 55, `Héroe 3D (${classId}) debe tener escultura de alto detalle (>= 55 mallas, actual: ${meshCount})`);
+  }
+});
+
+test('sistema de companeros: se desbloquean por nivel e incrementan la dificultad de enemigos', async () => {
+  const {
+    COMPANION_UNLOCK_LEVELS,
+    COMPANION_MAX,
+    companionsUnlockedForLevel,
+    enemyDifficultyMultiplier,
+    applyCompanionDifficultyToEnemy,
+    pickCompanionClass,
+    createCompanion,
+    createCompanionState,
+  } = await import('../src/core/companion.js');
+  const { createEnemy, computeHeroDerived } = await import('../src/core/combat.js');
+
+  assert.equal(COMPANION_UNLOCK_LEVELS.length, 4);
+  assert.equal(COMPANION_MAX, 4);
+  assert.equal(companionsUnlockedForLevel(1), 0);
+  assert.equal(companionsUnlockedForLevel(4), 0);
+  assert.equal(companionsUnlockedForLevel(5), 1);
+  assert.equal(companionsUnlockedForLevel(9), 1);
+  assert.equal(companionsUnlockedForLevel(10), 2);
+  assert.equal(companionsUnlockedForLevel(15), 3);
+  assert.equal(companionsUnlockedForLevel(20), 4);
+  assert.equal(companionsUnlockedForLevel(99), 4);
+
+  assert.deepEqual(enemyDifficultyMultiplier(0), { hp: 1.0, damage: 1.0 });
+  const m1 = enemyDifficultyMultiplier(1);
+  const m4 = enemyDifficultyMultiplier(4);
+  assert.ok(m1.hp > 1.0, '1 companero eleva la vida de los enemigos');
+  assert.ok(m4.hp > m1.hp, 'mas companeros => enemigos con mas vida');
+  assert.ok(m4.damage > m1.damage, 'mas companeros => enemigos con mas dano');
+
+  const enemy = createEnemy({ x: 5, y: 5, kind: 'skeleton', level: 3, tier: 'normal' }, 'e-test');
+  const baseHp = enemy.maxHp;
+  const baseDmg = [...enemy.damage];
+  applyCompanionDifficultyToEnemy(enemy, 2);
+  assert.ok(enemy.maxHp > baseHp, 'La vida del enemigo debe aumentar con 2 companeros');
+  assert.ok(enemy.damage[1] > baseDmg[1], 'El dano del enemigo debe aumentar con 2 companeros');
+
+  const picked = pickCompanionClass('hoplita', []);
+  assert.notEqual(picked, 'hoplita');
+  assert.ok(['campeon','arquera','oraculo','necromante','sombra','coribante'].includes(picked));
+
+  const comp = createCompanion('arquera', 7, 'Atalanta');
+  assert.equal(comp.classId, 'arquera');
+  assert.equal(comp.level, 7);
+  const cd = computeHeroDerived(comp);
+  assert.ok(cd.maxHp > 0 && cd.maxMana > 0);
+
+  const st = createCompanionState({ classId: 'oraculo', level: 5, x: 3, y: 3 });
+  assert.equal(st.classId, 'oraculo');
+  assert.equal(st.state, 'follow');
+  assert.ok(st.id);
+});
+

@@ -4,6 +4,7 @@
  * 2 = altar curativo de Asclepio, 3 = escaleras/portal de descenso, 4 = escaleras de ascenso.
  */
 import { createRng } from './rng.js';
+import { DEFAULT_THEME_ID, getMetaverseTheme } from './themes.js';
 
 export const TILE_WALL = 0;
 export const TILE_FLOOR = 1;
@@ -22,137 +23,12 @@ export function isFinalFloorLevel(level) {
   return false;
 }
 
-export const OVERWORLD_BIOME = {
-  id: 'helade',
-  name: 'Hélade · Tierra de los Mitos',
-  floor: '#4a7c3a',
-  wall: '#6b5e50',
-  accent: '#38bdf8',
-  isOverworld: true,
-};
-
-export const ASTRAL_BIOME = {
-  id: 'firmamento_titanes',
-  name: 'Mundo II · El Firmamento de los Titanes',
-  subtitle: 'Islas de mármol cósmico suspendidas, starlight y templos de los Titanes',
-  floor: '#1e1b4b',
-  wall: '#312e81',
-  accent: '#38bdf8',
-  particles: 'starlight',
-  isOverworld: true,
-  isNewWorld: true,
-};
-
-export const FINAL_BIOME = {
-  id: 'trono_tartaro',
-  name: 'Trono del Tártaro · Morada de Hades',
-  floor: '#1f102c',
-  wall: '#581c87',
-  accent: '#f97316',
-  particles: 'embers',
-  isFinalFloor: true,
-};
-
-export const BIOMES = [
-  {
-    id: 'styx',
-    templeId: 'bosque',
-    name: 'Templo del Bosque · Arboledas de Pan',
-    subtitle: 'Halls cubiertos de hiedra, raíces colosales y esporas de hada',
-    floor: '#1b2a20',
-    wall: '#263b2f',
-    accent: '#34d399',
-    particles: 'spores',
-  },
-  {
-    id: 'creta',
-    templeId: 'fuego',
-    name: 'Templo del Fuego · Minas de Hefesto',
-    subtitle: 'Ríos de magma, basalto volcánico y ascuas incandescentes',
-    floor: '#211512',
-    wall: '#451a14',
-    accent: '#f97316',
-    particles: 'embers',
-  },
-  {
-    id: 'agua',
-    templeId: 'agua',
-    name: 'Templo del Agua · Gruta de las Náyades',
-    subtitle: 'Salas sumergidas de mármol turquesa y fuentes sagradas',
-    floor: '#0e2636',
-    wall: '#154e63',
-    accent: '#38bdf8',
-    particles: 'bubbles',
-  },
-  {
-    id: 'hefesto',
-    templeId: 'sombras',
-    name: 'Templo de las Sombras · Catacumbas del Inframundo',
-    subtitle: 'Criptas sepulcrales, cadenas colgantes y fuegos fatuos',
-    floor: '#1b1329',
-    wall: '#382352',
-    accent: '#c084fc',
-    particles: 'wisps',
-  },
-  {
-    id: 'tartaro',
-    templeId: 'espiritu',
-    name: 'Templo del Espíritu · Coloso de las Amazonas',
-    subtitle: 'Arenas doradas del desierto, monolitos solares y obeliscos',
-    floor: '#382714',
-    wall: '#603f23',
-    accent: '#facc15',
-    particles: 'dust',
-  },
-];
-
-export const OVERWORLD_ZONES = [
-  {
-    id: 'aqueronte',
-    name: 'Ribera del Aqueronte',
-    subtitle: 'Campamento de la Sibila y muelle del barquero',
-    fx: 0.2,
-    fy: 0.72,
-    radiusFrac: 0.16,
-    color: '#60a5fa',
-  },
-  {
-    id: 'arcadia',
-    name: 'Bosques de Arcadia',
-    subtitle: 'Praderas de asfódelos y arboledas de Pan',
-    fx: 0.22,
-    fy: 0.23,
-    radiusFrac: 0.17,
-    color: '#4ade80',
-  },
-  {
-    id: 'delfos',
-    name: 'Santuario de Delfos',
-    subtitle: 'Explanada de mármol y Altar de Asclepio',
-    fx: 0.54,
-    fy: 0.46,
-    radiusFrac: 0.14,
-    color: '#facc15',
-  },
-  {
-    id: 'egeo',
-    name: 'Costa del Mar Egeo',
-    subtitle: 'Playas doradas, aguas turquesas y ruinas',
-    fx: 0.76,
-    fy: 0.75,
-    radiusFrac: 0.17,
-    color: '#38bdf8',
-  },
-  {
-    id: 'tartaro_gate',
-    name: 'Fauces del Tártaro',
-    subtitle: 'Desfiladero del Monte Otris · Descenso al Hades',
-    fx: 0.8,
-    fy: 0.21,
-    radiusFrac: 0.15,
-    color: '#f97316',
-  },
-];
+const _defaultTheme = getMetaverseTheme(DEFAULT_THEME_ID);
+export const OVERWORLD_BIOME = _defaultTheme.overworldBiome;
+export const ASTRAL_BIOME = _defaultTheme.astralBiome;
+export const FINAL_BIOME = _defaultTheme.finalBiome;
+export const BIOMES = _defaultTheme.dungeonBiomes;
+export const OVERWORLD_ZONES = _defaultTheme.overworldZones;
 
 function roomsOverlap(a, b, pad = 2) {
   return (
@@ -278,15 +154,17 @@ function ensurePathConnected(grid, terrain, x1, y1, x2, y2) {
  * Genera el Nivel 1 sobre la tierra: mundo abierto vivo de la Antigua Grecia
  * con pasto, caminos de tierra, agua animada, puentes, bosques, playa, ruinas y zonas míticas.
  */
-function generateOverworld({ width = 48, height = 48, seed = 'arch-1' } = {}) {
-  const rng = createRng(`${seed}:overworld:1`);
+function generateOverworld({ width = 48, height = 48, seed = 'arch-1', themeId = DEFAULT_THEME_ID } = {}) {
+  const theme = getMetaverseTheme(themeId);
+  const rng = createRng(`${seed}:overworld:1:${theme.id}`);
   const grid = Array.from({ length: height }, () => Array(width).fill(TILE_FLOOR));
   const explored = Array.from({ length: height }, () => Array(width).fill(0));
   const terrain = Array.from({ length: height }, () => Array(width).fill('grass'));
   const elevation = Array.from({ length: height }, () => Array(width).fill(0));
   const zoneGrid = Array.from({ length: height }, () => Array(width).fill('helen_wilds'));
 
-  const zones = OVERWORLD_ZONES.map((z) => {
+  const zoneDefs = theme.overworldZones || OVERWORLD_ZONES;
+  const zones = zoneDefs.map((z) => {
     const cx = Math.max(4, Math.min(width - 5, Math.round(z.fx * (width - 1))));
     const cy = Math.max(4, Math.min(height - 5, Math.round(z.fy * (height - 1))));
     const radius = Math.max(3, Math.round(Math.min(width, height) * z.radiusFrac));
@@ -303,11 +181,11 @@ function generateOverworld({ width = 48, height = 48, seed = 'arch-1' } = {}) {
   });
 
   const zoneById = Object.fromEntries(zones.map((z) => [z.id, z]));
-  const aqueronte = zoneById.aqueronte;
-  const arcadia = zoneById.arcadia;
-  const delfos = zoneById.delfos;
-  const egeo = zoneById.egeo;
-  const tartaroGate = zoneById.tartaro_gate;
+  const aqueronte = zoneById.aqueronte || zones[0];
+  const arcadia = zoneById.arcadia || zones[1];
+  const delfos = zoneById.delfos || zones[2];
+  const egeo = zoneById.egeo || zones[3];
+  const tartaroGate = zoneById.tartaro_gate || zones[4];
 
   // 1. Base de terreno natural: praderas, pasto variado, acantilados perimetrales y costas
   for (let y = 0; y < height; y++) {
@@ -772,7 +650,8 @@ function generateOverworld({ width = 48, height = 48, seed = 'arch-1' } = {}) {
     level: 1,
     isOverworld: true,
     isFinalFloor: false,
-    biome: OVERWORLD_BIOME,
+    themeId: theme.id,
+    biome: theme.overworldBiome || OVERWORLD_BIOME,
     grid,
     terrain,
     elevation,
@@ -799,8 +678,9 @@ function generateOverworld({ width = 48, height = 48, seed = 'arch-1' } = {}) {
 /**
  * Genera el Mundo II (El Firmamento de los Titanes), un nuevo mundo celestial tras derrotar a Hades.
  */
-export function generateNewWorld({ width = 48, height = 48, seed = 'arch-world2' } = {}) {
-  const rng = createRng(`${seed}:newworld:2`);
+export function generateNewWorld({ width = 48, height = 48, seed = 'arch-world2', themeId = DEFAULT_THEME_ID } = {}) {
+  const theme = getMetaverseTheme(themeId);
+  const rng = createRng(`${seed}:newworld:2:${theme.id}`);
   const grid = Array.from({ length: height }, () => Array(width).fill(TILE_FLOOR));
   const explored = Array.from({ length: height }, () => Array(width).fill(0));
   const terrain = Array.from({ length: height }, () => Array(width).fill('astral_grass'));
@@ -1008,7 +888,8 @@ export function generateNewWorld({ width = 48, height = 48, seed = 'arch-world2'
     isOverworld: true,
     isNewWorld: true,
     isFinalFloor: false,
-    biome: ASTRAL_BIOME,
+    themeId: theme.id,
+    biome: theme.astralBiome || ASTRAL_BIOME,
     grid,
     terrain,
     elevation,
@@ -1039,13 +920,14 @@ export function generateNewWorld({ width = 48, height = 48, seed = 'arch-world2'
  *  - Múltiples bajadas en cada piso (algunas hacia pisos sin bajada)
  *  - Monstruo Final Hades en el Piso -3 (o 22) en el Trono del Tártaro
  */
-export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'arch-1', parentFloor = null, isDeadEnd: forceDeadEnd = false } = {}) {
+export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'arch-1', parentFloor = null, isDeadEnd: forceDeadEnd = false, themeId = DEFAULT_THEME_ID } = {}) {
   if (level === 1) {
-    return generateOverworld({ width, height, seed });
+    return generateOverworld({ width, height, seed, themeId });
   }
   if (level === 'mundo-2' || level === 'world2' || level === 100) {
-    return generateNewWorld({ width, height, seed });
+    return generateNewWorld({ width, height, seed, themeId });
   }
+  const theme = getMetaverseTheme(themeId);
 
   const isFinal = isFinalFloorLevel(level);
   const isDeadEnd = Boolean(
@@ -1355,22 +1237,24 @@ export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'ar
     talked: false,
   };
 
+  const themeBiomes = theme.dungeonBiomes || BIOMES;
+  const themeFinal = theme.finalBiome || FINAL_BIOME;
   let biome;
   if (isFinal) {
-    biome = FINAL_BIOME;
+    biome = themeFinal;
   } else if (isDeadEnd) {
     biome = {
-      ...BIOMES[3],
+      ...(themeBiomes[3] || themeBiomes[0]),
       name: 'Cripta Sepulcral de los Caídos (Sin Salida)',
       subtitle: 'Cámara mortuoria cerrada · Riquezas y guardianes de las sombras',
     };
   } else if (typeof level === 'number' && level < 0) {
-    const idx = Math.min(BIOMES.length - 1, Math.max(0, Math.abs(level) - 1));
-    biome = BIOMES[idx];
+    const idx = Math.min(themeBiomes.length - 1, Math.max(0, Math.abs(level) - 1));
+    biome = themeBiomes[idx];
   } else if (typeof level === 'number' && level >= 2 && level <= FINAL_FLOOR) {
-    biome = BIOMES[Math.min(BIOMES.length - 1, Math.floor((level - 2) / 4))];
+    biome = themeBiomes[Math.min(themeBiomes.length - 1, Math.floor((level - 2) / 4))];
   } else {
-    const baseBiome = BIOMES[(absLevel - 2) % BIOMES.length];
+    const baseBiome = themeBiomes[(absLevel - 2) % themeBiomes.length];
     biome = { ...baseBiome, name: `${baseBiome.name} (Abismo)` };
   }
 
@@ -1395,6 +1279,7 @@ export function generateDungeon({ width = 44, height = 44, level = 1, seed = 'ar
     isOverworld: false,
     isFinalFloor: isFinal,
     isDeadEnd,
+    themeId: theme.id,
     biome,
     grid,
     explored,

@@ -124,6 +124,10 @@
             <span class="auto-pulse-dot" aria-hidden="true"></span>
             <span id="sideAutoBtnText">AUTO</span>
           </button>
+          <button id="btnSideToggleCompanion" type="button" class="side-companion-btn" title="Activar / Desactivar Modo Compañeros (aliados por nivel)">
+            <span class="companion-pulse-dot" aria-hidden="true"></span>
+            <span id="sideCompanionBtnText">ALIADOS</span>
+          </button>
         </div>
 
         <div id="sidePanelBody" class="side-panel-body">
@@ -217,6 +221,16 @@
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Grupo de Compañeros (aliados invocables por nivel) -->
+          <div class="side-companion-section" aria-label="Lista de compañeros aliados">
+            <div class="side-companion-header">
+              <span class="companion-title">⚔️ COMPAÑEROS</span>
+              <span id="sideCompanionCount" class="companion-count">0/0</span>
+            </div>
+            <div id="sideCompanionList" class="side-companion-list"></div>
+            <div id="sideCompanionHint" class="companion-hint">Desbloqueas aliados en niveles 5, 10, 15 y 20</div>
           </div>
 
           <!-- Mini Feed de Evolución Automática -->
@@ -422,20 +436,35 @@
 
   <!-- Selección de Héroe (La Hoguera del Aqueronte) -->
   <dialog id="startModal" class="start-dialog" aria-labelledby="startTitle">
-    <div class="modal-box">
+    <div class="modal-box start-modal-box">
       <div class="start-header">
-        <h2 id="startTitle">🔥 La Hoguera del Aqueronte — Selección de Héroe 3D</h2>
-        <span class="start-act-tag">De la Tierra al Piso 22</span>
+        <div class="start-title-wrap">
+          <h2 id="startTitle">🔥 La Hoguera del Aqueronte — Selección de Héroe 3D</h2>
+          <p id="startIntroText" class="start-intro">
+            Siete juramentos convergen en la Ribera del Aqueronte. Explora Grecia en la superficie, cruza el Inframundo y derrota a <strong>Hades en el Piso 22</strong>.
+          </p>
+        </div>
+        <span id="startActTag" class="start-act-tag">De la Tierra al Piso 22</span>
       </div>
-      <p class="start-intro">
-        Siete juramentos convergen en la Ribera del Aqueronte. Explora Grecia en la superficie, cruza el Inframundo y derrota a <strong>Hades en el Piso 22</strong>.
-      </p>
 
-      <div class="class-grid" id="classGrid"></div>
+      <div class="theme-switcher-bar" role="group" aria-label="Temática del Metaverso">
+        <span class="theme-switcher-label">🌌 Metaverso:</span>
+        <div id="themePills" class="theme-pills"></div>
+      </div>
 
-      <div class="card preview-card">
-        <canvas id="heroPreviewCanvas" width="136" height="136"></canvas>
-        <div id="classPreviewBox" class="preview-info"></div>
+      <div class="start-showcase">
+        <section class="preview-stage-card" aria-label="Vista previa 3D del héroe">
+          <div class="preview-canvas-wrap">
+            <canvas id="heroPreviewCanvas" width="460" height="500"></canvas>
+            <span class="preview-drag-hint">⟳ Arrastra para rotar 360°</span>
+          </div>
+          <div id="classPreviewBox" class="preview-info"></div>
+        </section>
+
+        <section class="class-selector-col" aria-label="Clases disponibles">
+          <div class="class-col-label">Elige tu Arquetipo</div>
+          <div class="class-grid" id="classGrid"></div>
+        </section>
       </div>
 
       <div class="start-footer">
